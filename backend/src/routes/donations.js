@@ -440,12 +440,24 @@ router.get("/:id", async (req, res, next) => {
       LEFT JOIN profiles pr ON d.donor_address = pr.public_key
       WHERE d.id = $1
     `;
-      const result = await pool.query(query, [id]);
+    const result = await pool.query(query, [id]);
 
     if (!result.rows[0]) {
       throw new AppError("DONATION_NOT_FOUND");
     }
-  });
+    const row = result.rows[0];
+    const donationData = mapDonationRow(row);
+    donationData.projectName = row.project_name;
+    donationData.donorDisplayName = row.donor_display_name || null;
+    donationData.co2OffsetKg = Math.round(
+      Number.parseFloat(row.co2_offset_kg || "0"),
+    );
+
+    res.json({ success: true, data: donationData });
+  } catch (e) {
+    next(e);
+  }
+});
 
 module.exports = router;
 module.exports.recordDonation = recordDonation;

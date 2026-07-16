@@ -35,8 +35,8 @@ const pool = require("../db/pool");
 const { adminRequired } = require("../middleware/auth");
 const { validate } = require("../middleware/validate");
 const {
-  verificationSchema,
   stellarAddress,
+  PROJECT_CATEGORIES,
 } = require("../validators/schemas");
 const { logAdminAction } = require("../services/audit");
 const { createRateLimiter } = require("../middleware/rateLimiter");
@@ -177,7 +177,7 @@ async function mirrorDocumentsToIPFS(documents) {
  * POST /api/verification-requests
  * Public. Persists the submission and notifies admins by email.
  */
-router.post("/", submitLimiter, validate(verificationSchema), async (req, res, next) => {
+router.post("/", submitLimiter, async (req, res, next) => {
   try {
     const body = req.body || {};
     const errors = [];
@@ -243,9 +243,9 @@ router.post("/", submitLimiter, validate(verificationSchema), async (req, res, n
       typeof body.projectCategory === "string"
         ? body.projectCategory.trim()
         : "";
-    if (!VALID_CATEGORIES.includes(projectCategory)) {
+    if (!PROJECT_CATEGORIES.includes(projectCategory)) {
       errors.push(
-        `projectCategory must be one of: ${VALID_CATEGORIES.join(", ")}`,
+        `projectCategory must be one of: ${PROJECT_CATEGORIES.join(", ")}`,
       );
     }
 
@@ -400,13 +400,13 @@ router.get("/me", async (req, res, next) => {
         WHERE wallet_address = $1
         ORDER BY submitted_at DESC
         LIMIT 50`,
-        [wallet],
-      );
-      res.json({ success: true, data: result.rows.map(mapRequestRow) });
-    } catch (e) {
-      next(e);
-    }
-  });
+      [wallet],
+    );
+    res.json({ success: true, data: result.rows.map(mapRequestRow) });
+  } catch (e) {
+    next(e);
+  }
+});
 
 /**
  * GET /api/verification-requests/:id

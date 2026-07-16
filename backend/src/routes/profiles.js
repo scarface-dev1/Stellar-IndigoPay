@@ -14,7 +14,6 @@ const {
   sanitizedStringField,
   validateBody,
 } = require("../middleware/validation");
-const { z } = require("zod");
 const { AppError } = require("../errors");
 
 function validateKey(k) {
@@ -45,12 +44,12 @@ router.get(
   async (req, res, next) => {
     try {
       const result = await pool.query(
-      "SELECT * FROM profiles WHERE public_key = $1",
-      [req.params.publicKey],
-    );
-    if (!result.rows[0]) {
-      throw new AppError("PROFILE_NOT_FOUND");
-    }
+        "SELECT * FROM profiles WHERE public_key = $1",
+        [req.params.publicKey],
+      );
+      if (!result.rows[0]) {
+        throw new AppError("PROFILE_NOT_FOUND");
+      }
 
       const co2Result = await pool.query(
         `SELECT COALESCE(
