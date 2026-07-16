@@ -2,6 +2,14 @@
 
 ### Features
 
+* **backend,frontend:** add Idempotency-Key support for donation recording (closes #148)
+  - Accept `Idempotency-Key` header (UUID v4) on `POST /api/donations`; store response and replay within 24 hours
+  - New `idempotency_keys` table via migration 016 with index on `created_at`
+  - Hourly pg-boss cleanup cron (`idempotencyCleanup`) purges expired keys (configurable via `IDEMPOTENCY_CLEANUP_CRON`)
+  - Frontend: `DonateForm` and `bridge` generate `crypto.randomUUID()` per donation attempt
+  - Documented in OpenAPI spec with 200 replay response
+  - 11 new tests: 5 unit (donations), 8 unit (cleanup), 3 integration (testcontainers)
+
 * **docs:** add CONTRIBUTORS.md to credit community work (GF-015, closes #64)
 
 * **backend:** implement Soroban RPC retry with exponential backoff and circuit breaker (GF-043, closes #100)
@@ -169,6 +177,8 @@ RETURNING id, (xmax=0) AS inserted` on `webhook_deliveries`.
   existing `deliveryId` rather than silently re-creating a row.
 - `backend/src/services/indexerService` exposes a `stop()` method so the
   Stellar Horizon stream is closed cleanly on SIGTERM.
+
+- **scripts:** ensure `scripts/setup-dev.sh` installs `mobile` and `extension` dependencies (fix README mismatch)
 
 - **NetworkPolicies** — default-deny for the `indigopay` namespace plus
   explicit allow policies for ingress → backend, backend → postgres +
