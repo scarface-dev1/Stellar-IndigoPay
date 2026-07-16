@@ -1,19 +1,27 @@
 export interface ExtensionSettings {
   backendUrl: string;
-  network: "testnet" | "mainnet";
+  network: 'testnet' | 'mainnet';
   defaultDonationAmount: string;
+  autoDetectEnabled: boolean;
+  excludedDomains: string[];
+  theme: 'dark' | 'light' | 'auto';
+  currency: 'XLM' | 'USD';
 }
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
-  backendUrl: "https://api.stellar-indigopay.app",
-  network: "testnet",
-  defaultDonationAmount: "5",
+  backendUrl: 'https://api.stellar-indigopay.app',
+  network: 'testnet',
+  defaultDonationAmount: '5',
+  autoDetectEnabled: true,
+  excludedDomains: [],
+  theme: 'dark',
+  currency: 'XLM',
 };
 
 export function loadSettings(): Promise<ExtensionSettings> {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(DEFAULT_SETTINGS, (items) => {
-      resolve(items as ExtensionSettings);
+    chrome.storage.sync.get(DEFAULT_SETTINGS as unknown as { [key: string]: unknown }, (items) => {
+      resolve(items as unknown as ExtensionSettings);
     });
   });
 }
@@ -38,7 +46,7 @@ function truncateAddress(address: string): string {
 
 async function getWalletPublicKey(): Promise<string | null> {
   const freighter = (window as any).freighter;
-  if (!freighter || typeof freighter.getPublicKey !== "function") return null;
+  if (!freighter || typeof freighter.getPublicKey !== 'function') return null;
   try {
     return (await freighter.getPublicKey()) as string;
   } catch {
@@ -48,7 +56,7 @@ async function getWalletPublicKey(): Promise<string | null> {
 
 async function isFreighterConnected(): Promise<boolean> {
   const freighter = (window as any).freighter;
-  if (!freighter || typeof freighter.isConnected !== "function") return false;
+  if (!freighter || typeof freighter.isConnected !== 'function') return false;
   try {
     const result = await freighter.isConnected();
     return result === true || result?.isConnected === true;
@@ -59,7 +67,7 @@ async function isFreighterConnected(): Promise<boolean> {
 
 async function freighterDisconnect(): Promise<void> {
   const freighter = (window as any).freighter;
-  if (freighter && typeof freighter.disconnect === "function") {
+  if (freighter && typeof freighter.disconnect === 'function') {
     try {
       await freighter.disconnect();
     } catch {
@@ -70,52 +78,90 @@ async function freighterDisconnect(): Promise<void> {
 
 // --- Settings page UI ---
 
-document.addEventListener("DOMContentLoaded", async () => {
-  const backBtn = document.getElementById("back-btn") as HTMLButtonElement;
-  const form = document.getElementById("settings-form") as HTMLFormElement;
-  const urlInput = document.getElementById("backend-url") as HTMLInputElement;
-  const urlError = document.getElementById("url-error") as HTMLSpanElement;
+document.addEventListener('DOMContentLoaded', async () => {
+  const backBtn = document.getElementById('back-btn') as HTMLButtonElement;
+  const form = document.getElementById('settings-form') as HTMLFormElement;
+  const urlInput = document.getElementById('backend-url') as HTMLInputElement;
+  const urlError = document.getElementById('url-error') as HTMLSpanElement;
   const amountInput = document.getElementById(
-    "default-amount",
+    'default-amount'
   ) as HTMLInputElement;
   const btnTestnet = document.getElementById(
-    "btn-testnet",
+    'btn-testnet'
   ) as HTMLButtonElement;
   const btnMainnet = document.getElementById(
-    "btn-mainnet",
+    'btn-mainnet'
   ) as HTMLButtonElement;
   const mainnetWarning = document.getElementById(
-    "mainnet-warning",
+    'mainnet-warning'
   ) as HTMLSpanElement;
-  const saveStatus = document.getElementById("save-status") as HTMLDivElement;
+  const saveStatus = document.getElementById('save-status') as HTMLDivElement;
   const walletAddressText = document.getElementById(
-    "wallet-address-text",
+    'wallet-address-text'
   ) as HTMLSpanElement;
-  const walletDot = document.getElementById("wallet-dot") as HTMLSpanElement;
+  const walletDot = document.getElementById('wallet-dot') as HTMLSpanElement;
   const walletActionBtn = document.getElementById(
-    "wallet-action-btn",
+    'wallet-action-btn'
   ) as HTMLButtonElement;
 
-  let selectedNetwork: "testnet" | "mainnet" = "testnet";
+  // New settings elements
+  const autoDetectToggle = document.getElementById(
+    'auto-detect-toggle'
+  ) as HTMLInputElement;
+  const excludedDomainsTextarea = document.getElementById(
+    'excluded-domains'
+  ) as HTMLTextAreaElement;
+  const btnThemeDark = document.getElementById(
+    'btn-theme-dark'
+  ) as HTMLButtonElement;
+  const btnThemeLight = document.getElementById(
+    'btn-theme-light'
+  ) as HTMLButtonElement;
+  const btnThemeAuto = document.getElementById(
+    'btn-theme-auto'
+  ) as HTMLButtonElement;
+  const btnCurrencyXlm = document.getElementById(
+    'btn-currency-xlm'
+  ) as HTMLButtonElement;
+  const btnCurrencyUsd = document.getElementById(
+    'btn-currency-usd'
+  ) as HTMLButtonElement;
+
+  let selectedNetwork: 'testnet' | 'mainnet' = 'testnet';
+  let selectedTheme: 'dark' | 'light' | 'auto' = 'dark';
+  let selectedCurrency: 'XLM' | 'USD' = 'XLM';
   let walletConnected = false;
 
-  function setActiveNetwork(network: "testnet" | "mainnet") {
+  function setActiveNetwork(network: 'testnet' | 'mainnet') {
     selectedNetwork = network;
-    btnTestnet.classList.toggle("network-btn-active", network === "testnet");
-    btnMainnet.classList.toggle("network-btn-active", network === "mainnet");
-    mainnetWarning.classList.toggle("hidden", network !== "mainnet");
+    btnTestnet.classList.toggle('network-btn-active', network === 'testnet');
+    btnMainnet.classList.toggle('network-btn-active', network === 'mainnet');
+    mainnetWarning.classList.toggle('hidden', network !== 'mainnet');
+  }
+
+  function setActiveTheme(theme: 'dark' | 'light' | 'auto') {
+    selectedTheme = theme;
+    btnThemeDark.classList.toggle('theme-btn-active', theme === 'dark');
+    btnThemeLight.classList.toggle('theme-btn-active', theme === 'light');
+    btnThemeAuto.classList.toggle('theme-btn-active', theme === 'auto');
+  }
+
+  function setActiveCurrency(currency: 'XLM' | 'USD') {
+    selectedCurrency = currency;
+    btnCurrencyXlm.classList.toggle('currency-btn-active', currency === 'XLM');
+    btnCurrencyUsd.classList.toggle('currency-btn-active', currency === 'USD');
   }
 
   function updateWalletUI(connected: boolean, publicKey: string | null = null) {
     walletConnected = connected;
     if (connected && publicKey) {
       walletAddressText.textContent = truncateAddress(publicKey);
-      walletDot.className = "dot online";
-      walletActionBtn.textContent = "Disconnect";
+      walletDot.className = 'dot online';
+      walletActionBtn.textContent = 'Disconnect';
     } else {
-      walletAddressText.textContent = "Not connected";
-      walletDot.className = "dot";
-      walletActionBtn.textContent = "Connect Wallet";
+      walletAddressText.textContent = 'Not connected';
+      walletDot.className = 'dot';
+      walletActionBtn.textContent = 'Connect Wallet';
     }
   }
 
@@ -124,6 +170,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   urlInput.value = settings.backendUrl;
   amountInput.value = settings.defaultDonationAmount;
   setActiveNetwork(settings.network);
+  setActiveTheme(settings.theme);
+  setActiveCurrency(settings.currency);
+
+  // Set auto-detect toggle
+  autoDetectToggle.checked = settings.autoDetectEnabled;
+
+  // Set excluded domains
+  excludedDomainsTextarea.value = (settings.excludedDomains || []).join('\n');
 
   // Check wallet connection
   const connected = await isFreighterConnected();
@@ -134,14 +188,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     updateWalletUI(false);
   }
 
-  backBtn.addEventListener("click", () => {
-    window.location.href = "popup.html";
+  backBtn.addEventListener('click', () => {
+    window.location.href = 'popup.html';
   });
 
-  btnTestnet.addEventListener("click", () => setActiveNetwork("testnet"));
-  btnMainnet.addEventListener("click", () => setActiveNetwork("mainnet"));
+  btnTestnet.addEventListener('click', () => setActiveNetwork('testnet'));
+  btnMainnet.addEventListener('click', () => setActiveNetwork('mainnet'));
 
-  walletActionBtn.addEventListener("click", async () => {
+  btnThemeDark.addEventListener('click', () => setActiveTheme('dark'));
+  btnThemeLight.addEventListener('click', () => setActiveTheme('light'));
+  btnThemeAuto.addEventListener('click', () => setActiveTheme('auto'));
+
+  btnCurrencyXlm.addEventListener('click', () => setActiveCurrency('XLM'));
+  btnCurrencyUsd.addEventListener('click', () => setActiveCurrency('USD'));
+
+  walletActionBtn.addEventListener('click', async () => {
     if (walletConnected) {
       await freighterDisconnect();
       updateWalletUI(false);
@@ -153,35 +214,46 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  form.addEventListener("submit", async (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    urlError.classList.add("hidden");
-    saveStatus.textContent = "";
-    saveStatus.className = "status-message";
+    urlError.classList.add('hidden');
+    saveStatus.textContent = '';
+    saveStatus.className = 'status-message';
 
     const rawUrl = urlInput.value.trim();
     try {
       new URL(rawUrl);
     } catch {
-      urlError.classList.remove("hidden");
+      urlError.classList.remove('hidden');
       return;
     }
 
     const defaultAmount = amountInput.value.trim();
     const amount =
-      defaultAmount && parseFloat(defaultAmount) > 0 ? defaultAmount : "5";
+      defaultAmount && parseFloat(defaultAmount) > 0 ? defaultAmount : '5';
+
+    // Parse excluded domains
+    const excludedDomainsRaw = excludedDomainsTextarea.value.trim();
+    const excludedDomains = excludedDomainsRaw
+      .split('\n')
+      .map((d) => d.trim().toLowerCase())
+      .filter((d) => d.length > 0);
 
     try {
       await saveSettings({
         backendUrl: rawUrl,
         network: selectedNetwork,
         defaultDonationAmount: amount,
+        autoDetectEnabled: autoDetectToggle.checked,
+        excludedDomains,
+        theme: selectedTheme,
+        currency: selectedCurrency,
       });
-      saveStatus.textContent = "Settings saved.";
-      saveStatus.classList.add("success");
+      saveStatus.textContent = 'Settings saved.';
+      saveStatus.classList.add('success');
     } catch (err: any) {
       saveStatus.textContent = `Failed to save: ${err.message}`;
-      saveStatus.classList.add("error");
+      saveStatus.classList.add('error');
     }
   });
 });

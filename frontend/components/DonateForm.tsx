@@ -190,6 +190,10 @@ export default function DonateForm({
     if (!isValid || step !== "idle") return;
     setError(null);
 
+    // Generate a unique idempotency key so the backend can safely deduplicate
+    // retried donation-recording requests within 24 hours.
+    const idempotencyKey = crypto.randomUUID();
+
     try {
       // ── DEX Path-Payment Donation (non-XLM asset → XLM via DEX) ──────
       if (selectedAsset && conversionEstimate) {
@@ -290,6 +294,7 @@ export default function DonateForm({
           currency: currency,
           message: message.trim() || undefined,
           transactionHash: result.hash,
+          idempotencyKey,
         });
 
         setStep("success");
@@ -340,6 +345,7 @@ export default function DonateForm({
           currency: currency,
           message: message.trim() || undefined,
           transactionHash: result.hash,
+          idempotencyKey,
         });
 
         setStep("success");

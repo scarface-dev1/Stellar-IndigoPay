@@ -25,6 +25,26 @@ function applySettings(settings: ExtensionSettings) {
   server = new Horizon.Server(horizonUrl);
 }
 
+// ==================== UTILITY FUNCTIONS ====================
+function escapeHtml(text: string): string {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+  const days = Math.floor(diff / 86400000);
+
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  if (hours < 24) return `${hours}h ago`;
+  return `${days}d ago`;
+}
+
 // ==================== BADGE HELPERS ====================
 function abbreviateNumber(num: number): string {
   if (num < 1000) return Math.floor(num).toString();
@@ -37,7 +57,6 @@ async function updateDonationBadge(totalXLM: number) {
   try {
     await chrome.action.setBadgeText({ text });
     await chrome.action.setBadgeBackgroundColor({ color: '#10b981' });
-    console.log(`[IndigoPay Badge] Updated: ${text} (${totalXLM} XLM)`);
   } catch (e) {
     console.error('Badge update failed:', e);
   }
@@ -68,6 +87,14 @@ interface ProjectResult {
   walletAddress?: string;
 }
 
+interface RecentDonation {
+  address: string;
+  amount: number;
+  projectName: string;
+  timestamp: number;
+  txHash: string;
+}
+
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 let activeDropdownIndex = -1;
 let dropdownItems: HTMLLIElement[] = [];
@@ -78,16 +105,21 @@ let selectedProjectId: string | null = null;
 let projectListItems: HTMLLIElement[] = [];
 let activeProjectListIndex = -1;
 
-/**
- * Render a list of projects into the #project-list element and wire up
- * keyboard navigation (ArrowDown/Up, Enter, Escape).
- *
- * Keyboard contract (issue #489):
- *   ArrowDown  — move focus to the next project item
- *   ArrowUp    — move focus to the previous project item
- *   Enter      — open the focused project in a new tab or trigger donation
- *   Escape     — close the popup window
- */
+/** Map a project category to a representative emoji. */
+function getProjectEmoji(category: string): string {
+  const map: Record<string, string> = {
+    'Reforestation': '🌳',
+    'Solar Energy': '☀️',
+    'Ocean Conservation': '🌊',
+    'Clean Water': '💧',
+    'Wildlife Protection': '🦁',
+    'Carbon Capture': '♻️',
+    'Wind Energy': '💨',
+    'Sustainable Agriculture': '🌾',
+  };
+  return map[category] ?? '🌿';
+}
+
 function renderProjectList(projects: ProjectResult[]) {
   const list = document.getElementById('project-list') as HTMLUListElement | null;
   if (!list) return;
@@ -120,12 +152,10 @@ function renderProjectList(projects: ProjectResult[]) {
       </div>
     `;
 
-    // Mouse click — select this project for donation
     li.addEventListener('click', () => {
       selectProjectListItem(li, p);
     });
 
-    // Allow keyboard activation via Enter/Space
     li.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
@@ -137,21 +167,16 @@ function renderProjectList(projects: ProjectResult[]) {
     projectListItems.push(li);
   });
 
-  // Update badge count
   const badge = document.querySelector('.section-header .badge');
   if (badge) badge.textContent = String(projects.length);
 }
 
 function selectProjectListItem(li: HTMLLIElement, p: ProjectResult) {
-  // Highlight the selected item
   projectListItems.forEach((el) => el.classList.remove('active'));
   li.classList.add('active');
 
-  // Pre-fill the destination address field
-  const destInput = document.getElementById('destination') as HTMLInputElement | null;
   const searchInput = document.getElementById('project-search') as HTMLInputElement | null;
-  if (p.walletAddress && destInput) {
-    destInput.value = p.walletAddress;
+  if (p.walletAddress) {
     selectedProjectId = p.id;
   }
   if (searchInput) {
@@ -168,21 +193,6 @@ function highlightProjectListItem(index: number) {
       el.classList.remove('active');
     }
   });
-}
-
-/** Map a project category to a representative emoji. */
-function getProjectEmoji(category: string): string {
-  const map: Record<string, string> = {
-    'Reforestation': '🌳',
-    'Solar Energy': '☀️',
-    'Ocean Conservation': '🌊',
-    'Clean Water': '💧',
-    'Wildlife Protection': '🦁',
-    'Carbon Capture': '♻️',
-    'Wind Energy': '💨',
-    'Sustainable Agriculture': '🌾',
-  };
-  return map[category] ?? '🌿';
 }
 
 function initProjectListKeyNav() {
@@ -243,10 +253,8 @@ function renderDropdown(projects: ProjectResult[], dropdown: HTMLUListElement) {
     `;
     li.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      const destInput = document.getElementById('destination') as HTMLInputElement | null;
       const searchInput = document.getElementById('project-search') as HTMLInputElement | null;
-      if (p.walletAddress && destInput) {
-        destInput.value = p.walletAddress;
+      if (p.walletAddress) {
         selectedProjectId = p.id;
       }
       if (searchInput) {
@@ -254,6 +262,46 @@ function renderDropdown(projects: ProjectResult[], dropdown: HTMLUListElement) {
       }
       dropdown.classList.add('hidden');
     });
+    dropdown.appendChild(li);
+    dropdownItems.push(li);
+  });
+
+  dropdown.classList.remove('hidden');
+}
+
+function initProjectSearch() {
+  const searchInput = document.getElementById('project-search') as HTMLInputElement | null;
+  const dropdown = document.getElementById('search-dropdown') as HTMLUListElement | null;
+  if (!searchInput || !dropdown) return;
+
+  searchInput.addEventListener('input', () => {
+    const query = searchInput.value.trim();
+    if (query.length < 2) {
+      dropdown.classList.add('hidden');
+      return;
+    }
+
+    debounce(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/projects?search=${encodeURIComponent(query)}&limit=5`);
+        if (res.ok) {
+          const data = await res.json();
+          renderDropdown(data.data || [], dropdown);
+        }
+      } catch (e) {
+        console.error('Search failed:', e);
+      }
+    }, 300);
+  });
+
+  searchInput.addEventListener('blur', () => {
+    setTimeout(() => dropdown.classList.add('hidden'), 150);
+  });
+
+  searchInput.addEventListener('focus', () => {
+    if (searchInput.value.trim().length >= 2) {
+      dropdown.classList.remove('hidden');
+    }
   });
 }
 
@@ -299,7 +347,6 @@ async function connectWallet() {
     const publicKey = await freighter.getPublicKey();
     currentPublicKey = publicKey;
 
-    // UI Updates
     const addressEl = document.getElementById('wallet-address') as HTMLSpanElement | null;
     if (addressEl) addressEl.textContent = `${publicKey.slice(0, 8)}...${publicKey.slice(-4)}`;
 
@@ -312,7 +359,6 @@ async function connectWallet() {
       connectBtn.disabled = true;
     }
 
-    // Fetch total donated from backend
     const profile = await fetchProfile(publicKey);
     let total = 0;
     if (profile?.data?.totalDonatedXLM || profile?.totalDonatedXLM) {
@@ -326,11 +372,41 @@ async function connectWallet() {
   }
 }
 
-// ==================== DONATION HELPERS (keep your existing ones) ====================
-// buildDonationTransaction, signWithFreighter, submitTransaction, recordDonation, etc.
+// ==================== RECENT INLINE DONATIONS ====================
+function renderRecentDonations(donations: RecentDonation[]) {
+  const container = document.getElementById('recent-donations');
+  const list = document.getElementById('recent-donations-list');
+  if (!container || !list) return;
 
-// After successful donation in your submit handler, add:
-// await updateTotalAfterDonation(parseFloat(amount));
+  if (donations.length === 0) {
+    container.classList.add('hidden');
+    return;
+  }
+
+  container.classList.remove('hidden');
+  list.innerHTML = '';
+
+  donations.slice(0, 5).forEach((donation) => {
+    const item = document.createElement('div');
+    item.className = 'recent-donation-item';
+    item.innerHTML = `
+      <div>
+        <span class="recent-donation-project">${escapeHtml(donation.projectName)}</span>
+        <span class="recent-donation-time">${formatRelativeTime(donation.timestamp)}</span>
+      </div>
+      <span class="recent-donation-amount">${donation.amount} XLM</span>
+    `;
+    list.appendChild(item);
+  });
+}
+
+async function loadRecentDonations(): Promise<RecentDonation[]> {
+  return new Promise<RecentDonation[]>((resolve) => {
+    chrome.storage.local.get(['recentInlineDonations'], (result) => {
+      resolve((result.recentInlineDonations as RecentDonation[]) || []);
+    });
+  });
+}
 
 // ==================== MAIN INIT ====================
 document.addEventListener('DOMContentLoaded', async () => {
@@ -343,16 +419,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     amountInput.value = settings.defaultDonationAmount;
   }
 
-  // Wire settings button
-  const settingsBtn = document.getElementById('settings-btn');
-  if (settingsBtn) {
-    settingsBtn.addEventListener('click', () => {
-      window.location.href = 'settings.html';
-    });
-  }
-
+  // Initialize search and navigation
   initProjectSearch();
   initProjectListKeyNav();
+
+  // Load recent inline donations
+  const recentDonations = await loadRecentDonations();
+  renderRecentDonations(recentDonations);
 
   // Check for pending context-menu donation
   chrome.storage.local.get(['pendingDonationProjectId', 'pendingDonationAddress'], async (res) => {
@@ -363,12 +436,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (response.ok) {
           const json = await response.json();
           const projectData = json.data;
-          
-          const destInput = document.getElementById('destination') as HTMLInputElement | null;
+
           const searchInput = document.getElementById('project-search') as HTMLInputElement | null;
-          
-          if (destInput && projectData.walletAddress) {
-            destInput.value = projectData.walletAddress;
+
+          if (projectData.walletAddress) {
             selectedProjectId = projectData.id;
           }
           if (searchInput && projectData.name) {
@@ -380,30 +451,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       }
     } else if (res.pendingDonationAddress) {
       chrome.storage.local.remove('pendingDonationAddress');
-      const destInput = document.getElementById('destination') as HTMLInputElement | null;
-      if (destInput) {
-        destInput.value = res.pendingDonationAddress;
-      }
     }
   });
-
-  const form = document.getElementById('donation-form');
-  if (!form) return;
-
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const sourceAddress = ((document.getElementById('source-address') as HTMLInputElement)?.value ?? '').trim();
-    const destination = ((document.getElementById('destination') as HTMLInputElement)?.value ?? '').trim();
-    const amount = ((document.getElementById('amount') as HTMLInputElement)?.value ?? '').trim();
-    const memo = ((document.getElementById('memo') as HTMLInputElement)?.value ?? '').trim();
-
-    if (!sourceAddress || !destination || !amount) {
-      setStatus('Please fill in all required fields.', true);
-      return;
-    }
-  } catch {
-    // Silently ignore — the skeleton loader remains visible
-  }
 
   // Connect button
   const connectBtn = document.getElementById('connect-btn') as HTMLButtonElement | null;
@@ -415,5 +464,42 @@ document.addEventListener('DOMContentLoaded', async () => {
     settingsBtn.addEventListener('click', () => window.location.href = 'settings.html');
   }
 
-  console.log('🌿 IndigoPay Extension initialized with donation badge (#490)');
+  // Preset amount buttons
+  const presetBtns = document.querySelectorAll('.preset-btn');
+  presetBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      presetBtns.forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      const amount = btn.getAttribute('data-amount');
+      if (amountInput && amount) {
+        amountInput.value = amount;
+      }
+      const donateBtn = document.getElementById('donate-submit') as HTMLButtonElement | null;
+      if (donateBtn) donateBtn.disabled = false;
+    });
+  });
+
+  // Custom amount input
+  if (amountInput) {
+    amountInput.addEventListener('input', () => {
+      const donateBtn = document.getElementById('donate-submit') as HTMLButtonElement | null;
+      presetBtns.forEach((b) => b.classList.remove('active'));
+      if (donateBtn) {
+        donateBtn.disabled = !amountInput.value || parseFloat(amountInput.value) <= 0;
+      }
+    });
+  }
+
+  // Load sample projects (would normally come from API)
+  try {
+    const res = await fetch(`${API_BASE}/api/projects?limit=3`);
+    if (res.ok) {
+      const data = await res.json();
+      renderProjectList(data.data || []);
+    }
+  } catch {
+    // Silently ignore — the skeleton loader remains visible
+  }
+
+  console.log('🌿 IndigoPay Extension initialized with inline donations (#135)');
 });

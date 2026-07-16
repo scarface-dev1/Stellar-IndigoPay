@@ -59,6 +59,7 @@ const {
   stop: stopWebhookQueue,
 } = require("./services/webhookQueue");
 const { start: startPushQueue } = require("./services/pushQueue");
+const { start: startIdempotencyCleanup } = require("./services/idempotencyCleanup");
 const { startIndexer } = require("./services/indexerService");
 const { startReconciler, stopReconciler } = require("./services/indexerReconciler");
 const { startDLQWorker, stopDLQWorker } = require("./services/indexerDLQWorker");
@@ -388,6 +389,7 @@ async function startServer() {
   await startProfileQueue(io);
   await startWebhookQueue();
   await startPushQueue();
+  await startIdempotencyCleanup();
 
   // digestQueue is optional in some deployments
   try {
@@ -461,6 +463,7 @@ async function startServer() {
     "./services/digestQueue",
     "./services/webhookQueue",
     "./services/pushQueue",
+    "./services/idempotencyCleanup",
   ]) {
     lifecycle.onShutdown(async () => {
       try {

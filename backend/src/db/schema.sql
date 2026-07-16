@@ -193,6 +193,19 @@ CREATE TABLE IF NOT EXISTS donation_matches (
 );
 
 
+-- idempotency_keys: stores response snapshots keyed by Idempotency-Key
+-- headers so safe retries of POST /api/donations replay the original
+-- response instead of creating duplicate donation records. Keys expire
+-- after 24 hours and are cleaned up by a background job.
+CREATE TABLE IF NOT EXISTS idempotency_keys (
+  key TEXT PRIMARY KEY,
+  response_status INTEGER NOT NULL,
+  response_body JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_idempotency_keys_created_at
+  ON idempotency_keys (created_at);
+
 -- device_tokens: push notification device registrations. token is the FCM /
 -- APNs device token; platform is 'ios' or 'android'. wallet_address links
 -- the device to a profile when known.

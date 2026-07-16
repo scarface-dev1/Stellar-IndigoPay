@@ -21,6 +21,9 @@ const donationLimiter = createRateLimiter(10, 1); // 10 requests per minute
 // real time without going through Socket.IO.
 const donationEvents = new EventEmitter();
 
+// Idempotency key expiry: 24 hours in milliseconds
+const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
+
 function validateKey(k) {
   if (!k || !/^G[A-Z0-9]{55}$/.test(k)) {
     throw new AppError("INVALID_ADDRESS");
@@ -31,6 +34,70 @@ function validateTxHash(h) {
   if (!h || !/^[a-fA-F0-9]{64}$/.test(h)) {
     throw new AppError("INVALID_TX_HASH");
   }
+}
+
+/**
+ * Validate that the idempotency key is a well-formed UUID v4.
+ * Returns true if valid, throws 400 otherwise.
+ */
+function validateIdempotencyKey(key) {
+  if (!key || typeof key !== "string" || key.length > 255) {
+    const e = new Error("Invalid Idempotency-Key header");
+    e.status = 400;
+    throw e;
+  }
+  // Must be a valid UUID v4
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      key,
+    )
+  ) {
+    const e = new Error(
+      "Idempotency-Key must be a valid UUID v4",
+    );
+    e.status = 400;
+    throw e;
+  }
+  return true;
+}
+
+/**
+ * Check the idempotency_keys table for an existing, unexpired entry.
+ * Returns the cached response body if found, or null when the key is
+ * new or expired (the expired row is deleted in-place).
+ */
+async function lookupIdempotencyKey(client, key) {
+  const result = await client.query(
+    "SELECT response_status, response_body, created_at FROM idempotency_keys WHERE key = $1",
+    [key],
+  );
+
+  if (!result.rows[0]) return null;
+
+  const { response_status, response_body, created_at } = result.rows[0];
+  const age = Date.now() - new Date(created_at).getTime();
+
+  if (age > IDEMPOTENCY_KEY_TTL_MS) {
+    // Key expired — remove it and treat as new
+    await client.query("DELETE FROM idempotency_keys WHERE key = $1", [key]);
+    return null;
+  }
+
+  return { status: response_status, body: response_body };
+}
+
+/**
+ * Persist the idempotency key with the response for future replays.
+ * Uses INSERT … ON CONFLICT DO NOTHING to be safe against concurrent
+ * requests that might have raced to store the same key.
+ */
+async function storeIdempotencyKey(client, key, status, body) {
+  await client.query(
+    `INSERT INTO idempotency_keys (key, response_status, response_body)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (key) DO NOTHING`,
+    [key, status, JSON.stringify(body)],
+  );
 }
 
 /**
@@ -63,7 +130,26 @@ async function recordDonation(req, res, next) {
     validateKey(donorAddress);
     validateTxHash(transactionHash);
 
-    client = await pool.connect();
+    // ── Idempotency-Key support ──────────────────────────────────────────
+    // Clients can send an Idempotency-Key header (UUID v4) to safely retry
+    // donation recording without creating duplicate records. The server
+    // stores the response keyed by this header and replays it on subsequent
+    // requests with the same key within 24 hours.
+    const idempotencyKey = req.headers?.["idempotency-key"];
+    if (idempotencyKey) {
+      validateIdempotencyKey(idempotencyKey);
+
+      if (!client) client = await pool.connect();
+
+      const cached = await lookupIdempotencyKey(client, idempotencyKey);
+      if (cached) {
+        client.release();
+        client = null; // prevent double-release in the finally block
+        return res.status(cached.status).json(cached.body);
+      }
+    }
+
+    if (!client) client = await pool.connect();
 
     const projectResult = await client.query(
       "SELECT id FROM projects WHERE id = $1",
@@ -89,11 +175,17 @@ async function recordDonation(req, res, next) {
       "SELECT * FROM donations WHERE transaction_hash = $1",
       [transactionHash],
     );
-    if (existingResult.rows[0])
-      return res.json({
+    if (existingResult.rows[0]) {
+      const dedupResponse = {
         success: true,
         data: mapDonationRow(existingResult.rows[0]),
-      });
+      };
+      // Store idempotency key for future replays if provided
+      if (idempotencyKey) {
+        await storeIdempotencyKey(client, idempotencyKey, 200, dedupResponse);
+      }
+      return res.json(dedupResponse);
+    }
 
     // Verify the transaction is confirmed on-chain before recording it.
     // Prevents a caller from inflating raised_xlm with a fake or unconfirmed tx hash.
@@ -266,7 +358,14 @@ async function recordDonation(req, res, next) {
     const mappedDonation = mapDonationRow(donationResult.rows[0]);
     donationEvents.emit("new_donation", mappedDonation);
 
-    res.status(201).json({ success: true, data: mappedDonation });
+    const responseBody = { success: true, data: mappedDonation };
+
+    // Store idempotency key for future replays if provided
+    if (idempotencyKey) {
+      await storeIdempotencyKey(client, idempotencyKey, 201, responseBody);
+    }
+
+    res.status(201).json(responseBody);
   } catch (e) {
     if (inTransaction && client) await client.query("ROLLBACK");
     next(e);

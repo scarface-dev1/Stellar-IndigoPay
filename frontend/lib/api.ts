@@ -273,10 +273,16 @@ export async function recordDonation(payload: {
   sourceAsset?: string;
   conversionPath?: Array<{ code: string; issuer: string }>;
   convertedAmountXLM?: string;
+  idempotencyKey?: string;
 }) {
+  const headers: Record<string, string> = {};
+  if (payload.idempotencyKey) {
+    headers["Idempotency-Key"] = payload.idempotencyKey;
+  }
   const { data } = await api.post<{ success: boolean; data: Donation }>(
     "/api/donations",
     payload,
+    { headers },
   );
   return data.data;
 }
