@@ -18,88 +18,214 @@
 
       <main>
         <form id="settings-form" class="glass-panel settings-form" novalidate>
-          <div class="settings-field">
-            <label class="settings-label" for="backend-url">Backend URL</label>
-            <p class="settings-hint">
-              The IndigoPay API endpoint this extension connects to.
-            </p>
-            <input
-              type="url"
-              id="backend-url"
-              class="settings-input"
-              placeholder="https://api.stellar-indigopay.app"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <span id="url-error" class="settings-error hidden"
-              >Please enter a valid URL.</span
-            >
-          </div>
+          <!-- Inline Detection Section -->
+          <div class="settings-section">
+            <h3 class="settings-section-title">Inline Donation Detection</h3>
 
-          <div class="settings-field">
-            <label class="settings-label" for="default-amount"
-              >Default Donation Amount</label
-            >
-            <p class="settings-hint">Pre-filled amount on the donation form.</p>
-            <div class="input-wrapper" style="position: relative">
-              <input
-                type="number"
-                id="default-amount"
-                class="settings-input"
-                placeholder="5"
-                min="0.1"
-                step="0.1"
-                autocomplete="off"
-              />
-              <span class="currency">XLM</span>
-            </div>
-          </div>
-
-          <div class="settings-field">
-            <label class="settings-label">Stellar Network</label>
-            <p class="settings-hint">
-              Choose which Stellar network to use for transactions.
-            </p>
-            <div
-              class="network-toggle"
-              role="group"
-              aria-label="Stellar network"
-            >
-              <button
-                type="button"
-                id="btn-testnet"
-                class="btn network-btn"
-                data-network="testnet"
-              >
-                Testnet
-              </button>
-              <button
-                type="button"
-                id="btn-mainnet"
-                class="btn network-btn"
-                data-network="mainnet"
-              >
-                Mainnet
-              </button>
-            </div>
-            <span id="mainnet-warning" class="settings-warning hidden">
-              Warning: Mainnet transactions use real XLM.
-            </span>
-          </div>
-
-          <div class="settings-field">
-            <label class="settings-label">Connected Wallet</label>
-            <p class="settings-hint">
-              Your Freighter wallet connection status.
-            </p>
-            <div class="wallet-status-settings">
-              <div id="wallet-display" class="wallet-connected">
-                <span class="dot" id="wallet-dot"></span>
-                <span id="wallet-address-text">Not connected</span>
+            <div class="settings-field">
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <label class="settings-label" for="auto-detect-toggle"
+                    >Auto-detect Stellar Addresses</label
+                  >
+                  <p class="settings-hint">
+                    Automatically detect and highlight Stellar addresses on
+                    webpages with a "💚 Donate" button.
+                  </p>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="auto-detect-toggle" checked />
+                  <span class="toggle-slider"></span>
+                </label>
               </div>
-              <button id="wallet-action-btn" class="btn glow-btn" type="button">
-                Connect Wallet
-              </button>
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label" for="excluded-domains"
+                >Excluded Domains</label
+              >
+              <p class="settings-hint">
+                Domains where address detection is disabled. One domain per
+                line.
+              </p>
+              <textarea
+                id="excluded-domains"
+                class="settings-textarea"
+                placeholder="example.com&#10;another-site.org"
+                rows="4"
+                spellcheck="false"
+              ></textarea>
+            </div>
+          </div>
+
+          <!-- Appearance Section -->
+          <div class="settings-section">
+            <h3 class="settings-section-title">Appearance</h3>
+
+            <div class="settings-field">
+              <label class="settings-label">Theme</label>
+              <p class="settings-hint">
+                Choose the theme for the inline donation form.
+              </p>
+              <div
+                class="theme-toggle"
+                role="group"
+                aria-label="Theme selection"
+              >
+                <button
+                  type="button"
+                  id="btn-theme-dark"
+                  class="btn theme-btn theme-btn-active"
+                  data-theme="dark"
+                >
+                  🌙 Dark
+                </button>
+                <button
+                  type="button"
+                  id="btn-theme-light"
+                  class="btn theme-btn"
+                  data-theme="light"
+                >
+                  ☀️ Light
+                </button>
+                <button
+                  type="button"
+                  id="btn-theme-auto"
+                  class="btn theme-btn"
+                  data-theme="auto"
+                >
+                  🔄 Auto
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Donation Defaults Section -->
+          <div class="settings-section">
+            <h3 class="settings-section-title">Donation Defaults</h3>
+
+            <div class="settings-field">
+              <label class="settings-label" for="default-amount"
+                >Default Donation Amount</label
+              >
+              <p class="settings-hint">Pre-filled amount on the donation form.</p>
+              <div class="input-wrapper" style="position: relative">
+                <input
+                  type="number"
+                  id="default-amount"
+                  class="settings-input"
+                  placeholder="5"
+                  min="0.1"
+                  step="0.1"
+                  autocomplete="off"
+                />
+                <span class="currency">XLM</span>
+              </div>
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label">Default Currency Display</label>
+              <p class="settings-hint">
+                Currency to display amounts in (conversion is approximate).
+              </p>
+              <div
+                class="currency-toggle"
+                role="group"
+                aria-label="Currency selection"
+              >
+                <button
+                  type="button"
+                  id="btn-currency-xlm"
+                  class="btn currency-btn currency-btn-active"
+                  data-currency="XLM"
+                >
+                  XLM
+                </button>
+                <button
+                  type="button"
+                  id="btn-currency-usd"
+                  class="btn currency-btn"
+                  data-currency="USD"
+                >
+                  USD
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Network & API Section -->
+          <div class="settings-section">
+            <h3 class="settings-section-title">Network & API</h3>
+
+            <div class="settings-field">
+              <label class="settings-label" for="backend-url">Backend URL</label>
+              <p class="settings-hint">
+                The IndigoPay API endpoint this extension connects to.
+              </p>
+              <input
+                type="url"
+                id="backend-url"
+                class="settings-input"
+                placeholder="https://api.stellar-indigopay.app"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <span id="url-error" class="settings-error hidden"
+                >Please enter a valid URL.</span
+              >
+            </div>
+
+            <div class="settings-field">
+              <label class="settings-label">Stellar Network</label>
+              <p class="settings-hint">
+                Choose which Stellar network to use for transactions.
+              </p>
+              <div
+                class="network-toggle"
+                role="group"
+                aria-label="Stellar network"
+              >
+                <button
+                  type="button"
+                  id="btn-testnet"
+                  class="btn network-btn"
+                  data-network="testnet"
+                >
+                  Testnet
+                </button>
+                <button
+                  type="button"
+                  id="btn-mainnet"
+                  class="btn network-btn"
+                  data-network="mainnet"
+                >
+                  Mainnet
+                </button>
+              </div>
+              <span id="mainnet-warning" class="settings-warning hidden">
+                Warning: Mainnet transactions use real XLM.
+              </span>
+            </div>
+          </div>
+
+          <!-- Wallet Section -->
+          <div class="settings-section">
+            <h3 class="settings-section-title">Wallet</h3>
+
+            <div class="settings-field">
+              <label class="settings-label">Connected Wallet</label>
+              <p class="settings-hint">
+                Your Freighter wallet connection status.
+              </p>
+              <div class="wallet-status-settings">
+                <div id="wallet-display" class="wallet-connected">
+                  <span class="dot" id="wallet-dot"></span>
+                  <span id="wallet-address-text">Not connected</span>
+                </div>
+                <button id="wallet-action-btn" class="btn glow-btn" type="button">
+                  Connect Wallet
+                </button>
+              </div>
             </div>
           </div>
 

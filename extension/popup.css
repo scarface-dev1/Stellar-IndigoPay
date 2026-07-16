@@ -615,3 +615,226 @@ input[type="number"]:focus {
   font-size: 0.78rem;
   white-space: nowrap;
 }
+
+/* Settings section title */
+.settings-section {
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--glass-border);
+}
+
+.settings-section:last-of-type {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.settings-section-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 12px;
+}
+
+/* Toggle switch */
+.toggle-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.toggle-info {
+  flex: 1;
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: 0.3s;
+  border-radius: 24px;
+}
+
+.toggle-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #94a3b8;
+  transition: 0.3s;
+  border-radius: 50%;
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: rgba(99, 102, 241, 0.3);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.toggle-switch input:checked + .toggle-slider:before {
+  transform: translateX(20px);
+  background-color: var(--accent-color);
+}
+
+.toggle-switch input:focus + .toggle-slider {
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
+}
+
+/* Settings textarea */
+.settings-textarea {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 0.85rem;
+  outline: none;
+  resize: vertical;
+  min-height: 80px;
+  transition: border-color 0.2s ease;
+  box-sizing: border-box;
+}
+
+.settings-textarea:focus {
+  border-color: var(--accent-color);
+}
+
+.settings-textarea::placeholder {
+  color: var(--text-secondary);
+}
+
+/* Theme toggle buttons */
+.theme-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.theme-btn {
+  flex: 1;
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  padding: 9px 0;
+  font-size: 0.8rem;
+  transition: all 0.2s;
+}
+
+.theme-btn-active {
+  background: rgba(99, 102, 241, 0.15);
+  color: var(--accent-color);
+  border-color: rgba(99, 102, 241, 0.4);
+}
+
+/* Currency toggle buttons */
+.currency-toggle {
+  display: flex;
+  gap: 8px;
+}
+
+.currency-btn {
+  flex: 1;
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  border: 1px solid var(--glass-border);
+  padding: 9px 0;
+  font-size: 0.85rem;
+  transition: all 0.2s;
+}
+
+.currency-btn-active {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.4);
+}
+
+/* Recent inline donations in popup */
+.recent-donations {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--glass-border);
+}
+
+.recent-donations-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.recent-donation-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
+.recent-donation-item:last-child {
+  border-bottom: none;
+}
+
+.recent-donation-project {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.recent-donation-amount {
+  color: #10b981;
+  font-weight: 600;
+}
+
+.recent-donation-time {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+}
+
+.no-recent-donations {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* Inline donation link in popup */
+.inline-donation-link {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--accent-color);
+  cursor: pointer;
+  margin-top: 8px;
+  padding: 8px;
+  background: rgba(99, 102, 241, 0.1);
+  border-radius: 8px;
+  transition: background 0.2s;
+}
+
+.inline-donation-link:hover {
+  background: rgba(99, 102, 241, 0.15);
+}

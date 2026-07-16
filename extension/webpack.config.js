@@ -8,6 +8,7 @@ module.exports = {
     settings: "./src/settings.ts",
     "content-script": "./src/content-script.ts",
     background: "./src/background.ts",
+    "donate-form": "./src/donate-form.ts",
   },
   output: {
     filename: "[name].js",

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IndigoPay Companion",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Support your favorite sustainable projects with a single click.",
   "browser_action": {
     "default_popup": "popup.html",
@@ -16,7 +16,14 @@
     {
       "matches": ["<all_urls>"],
       "js": ["dist-firefox/content-script.js"],
+      "css": ["dist-firefox/content.css"],
       "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dist-firefox/donate-form.js"],
+      "matches": ["<all_urls>"]
     }
   ],
   "privacy_policy_url": "https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/blob/main/PRIVACY.md",

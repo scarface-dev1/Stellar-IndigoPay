@@ -1,0 +1,149 @@
+/**
+ * IndigoPay Content Script Styles
+ * Styles for injected elements on any webpage.
+ * Uses specific class names to avoid conflicts with host page CSS.
+ */
+
+/* Address wrapper - contains the address and donate button */
+.indigopay-address-wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: baseline;
+}
+
+/* Highlighted Stellar address */
+.indigopay-address {
+  display: inline-block;
+  background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+  color: #ffffff !important;
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-family: 'SF Mono', Monaco, 'Courier New', Consolas, monospace;
+  font-size: 0.9em;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none !important;
+  border: none;
+  box-shadow: 0 2px 4px rgba(16, 185, 129, 0.2);
+}
+
+.indigopay-address:hover {
+  background: linear-gradient(135deg, #059669 0%, #047857 100%);
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+  transform: translateY(-1px);
+}
+
+/* Donate button */
+.indigopay-donate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+  color: #ffffff !important;
+  border: none;
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  box-shadow: 0 2px 4px rgba(99, 102, 241, 0.2);
+  line-height: 1.4;
+}
+
+.indigopay-donate-btn:hover {
+  background: linear-gradient(135deg, #4f46e5 0%, #4338ca 100%);
+  box-shadow: 0 4px 8px rgba(99, 102, 241, 0.3);
+  transform: translateY(-1px);
+}
+
+.indigopay-donate-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(99, 102, 241, 0.2);
+}
+
+.indigopay-donate-btn:focus {
+  outline: 2px solid rgba(99, 102, 241, 0.5);
+  outline-offset: 2px;
+}
+
+/* Animation for button appearance */
+@keyframes indigopay-fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.indigopay-donate-btn {
+  animation: indigopay-fadeIn 0.2s ease-out;
+}
+
+/* Custom element - ensure no default styles interfere */
+indigopay-donate-form {
+  all: initial;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 2147483647;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Dark mode support - detect user preference */
+@media (prefers-color-scheme: dark) {
+  .indigopay-address {
+    box-shadow: 0 2px 4px rgba(16, 185, 129, 0.3);
+  }
+
+  .indigopay-donate-btn {
+    box-shadow: 0 2px 4px rgba(99, 102, 241, 0.3);
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .indigopay-address {
+    border: 2px solid #059669;
+  }
+
+  .indigopay-donate-btn {
+    border: 2px solid #4f46e5;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .indigopay-address,
+  .indigopay-donate-btn {
+    transition: none;
+    animation: none;
+  }
+
+  .indigopay-address:hover,
+  .indigopay-donate-btn:hover {
+    transform: none;
+  }
+}
+
+/* Print styles - hide interactive elements */
+@media print {
+  .indigopay-donate-btn {
+    display: none !important;
+  }
+
+  .indigopay-address {
+    background: none !important;
+    color: inherit !important;
+    padding: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+}

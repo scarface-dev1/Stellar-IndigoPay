@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Stellar-IndigoPay Companion",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Support verified climate projects on Stellar with a single click — 100% on-chain, zero fees.",
   "action": {
     "default_popup": "popup.html",
@@ -11,18 +11,19 @@
   "background": {
     "service_worker": "dist/background.js"
   },
-  "host_permissions": [
-    "https://app.indigopay.io/*",
-    "https://testnet.indigopay.io/*"
-  ],
+  "host_permissions": ["<all_urls>"],
   "content_scripts": [
     {
-      "matches": [
-        "https://app.indigopay.io/*",
-        "https://testnet.indigopay.io/*"
-      ],
+      "matches": ["<all_urls>"],
       "js": ["dist/content-script.js"],
+      "css": ["dist/content.css"],
       "run_at": "document_end"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["dist/donate-form.js"],
+      "matches": ["<all_urls>"]
     }
   ],
   "privacy_policy_url": "https://github.com/Stellar-IndigoPay/Stellar-IndigoPay/blob/main/PRIVACY.md"
