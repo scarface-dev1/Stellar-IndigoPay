@@ -105,8 +105,14 @@ app.use("/", require("./routes/metrics"));
 
 // Health and readiness: liveness 200 if alive, readiness 200 only when every
 // required downstream is reachable. Both fail-fast during graceful shutdown.
+//
+// /health/ready is mounted at a separate path (before helmet/CSRF) so the
+// CI/CD secret-rotation workflow can call it without authentication. It uses
+// the same readiness handler as /api/readyz — both validate every external
+// dependency (Postgres, Redis, Horizon, Soroban RPC).
 app.use("/api/health", require("./routes/health"));
 app.use("/api/readyz", require("./routes/readiness"));
+app.use("/health/ready", require("./routes/readiness"));
 
 // Security headers and body parsing.
 app.use(

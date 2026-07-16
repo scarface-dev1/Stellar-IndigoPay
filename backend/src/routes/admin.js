@@ -180,5 +180,6 @@ router.use("/queues", require("./admin/queues"));
 router.use("/documents", require("./admin/documents"));
 router.use("/webhooks", require("./admin/webhooks"));
 router.use("/indexer", require("./admin/indexer"));
+router.use("/secret-rotations", require("./admin/secretRotations"));
 
 module.exports = router;
