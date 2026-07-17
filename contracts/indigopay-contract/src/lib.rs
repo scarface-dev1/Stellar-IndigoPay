@@ -1,8 +1,8 @@
 #![no_std]
 #[cfg(all(test, feature = "testutils"))]
-mod fuzz_tests;
-#[cfg(all(test, feature = "testutils"))]
 mod fuzz_template;
+#[cfg(all(test, feature = "testutils"))]
+mod fuzz_tests;
 
 /**
  * contracts/indigopay-contract/src/lib.rs
@@ -1948,10 +1948,7 @@ impl IndigoPayContract {
         env.storage()
             .instance()
             .remove(&DataKey::UpgradeEffectiveAt);
-        UpgradeExecuted {
-            wasm_hash: pending,
-        }
-        .publish(&env);
+        UpgradeExecuted { wasm_hash: pending }.publish(&env);
     }
 
     /// Admin-only: cancel a pending upgrade without executing it. Use

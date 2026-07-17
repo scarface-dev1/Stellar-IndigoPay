@@ -60,7 +60,13 @@ mod fuzz {
 
     /// Returns (env, contract_id, client, project_id, token).
     /// Creates one registered project and one XLM token for donations.
-    fn setup() -> (Env, Address, IndigoPayContractClient<'static>, SorobanString, Address) {
+    fn setup() -> (
+        Env,
+        Address,
+        IndigoPayContractClient<'static>,
+        SorobanString,
+        Address,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -89,7 +95,12 @@ mod fuzz {
     }
 
     /// Returns (env, admin, client, project_id).
-    fn setup_with_admin() -> (Env, Address, IndigoPayContractClient<'static>, SorobanString) {
+    fn setup_with_admin() -> (
+        Env,
+        Address,
+        IndigoPayContractClient<'static>,
+        SorobanString,
+    ) {
         let env = Env::default();
         env.mock_all_auths();
 
@@ -131,13 +142,32 @@ mod fuzz {
 
         let project_id = SorobanString::from_str(&env, "proj-usdc-fuzz");
         let wallet = Address::generate(&env);
+
+        // Register with a safe value within MAX_CO2_PER_XLM bounds, then
+        // bypass the bounds check via direct storage manipulation when the
+        // caller needs a higher rate (e.g. the CO2-overflow fuzz test).
+        let safe_co2 = co2_per_xlm.min(MAX_CO2_PER_XLM);
         client.register_project(
             &admin,
             &project_id,
             &SorobanString::from_str(&env, "USDC Fuzz Project"),
             &wallet,
-            &co2_per_xlm,
+            &safe_co2,
         );
+
+        if co2_per_xlm != safe_co2 {
+            env.as_contract(&cid, || {
+                let mut project: Project = env
+                    .storage()
+                    .instance()
+                    .get(&DataKey::Project(project_id.clone()))
+                    .expect("project should exist");
+                project.co2_per_xlm = co2_per_xlm;
+                env.storage()
+                    .instance()
+                    .set(&DataKey::Project(project_id.clone()), &project);
+            });
+        }
 
         let token_admin = Address::generate(&env);
         let usdc_token = env
@@ -752,7 +782,7 @@ mod fuzz {
         fn prop_usdc_amount_near_max(usdc_amount in (i128::MAX / 8 + 1)..=i128::MAX) {
             let (env, client, project_id, usdc_token) = setup_usdc(100u32);
             let donor = Address::generate(&env);
-            fund_usdc(&env, &usdc_token, &donor, &usdc_amount);
+            fund_usdc(&env, &usdc_token, &donor, usdc_amount);
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 client.donate_usdc(&usdc_token, &donor, &project_id, &usdc_amount, &MSG_HASH);
@@ -798,7 +828,7 @@ mod fuzz {
             client.deactivate_project(&admin, &project_id);
 
             let donor = Address::generate(&env);
-            fund_usdc(&env, &usdc_token, &donor, &amount);
+            fund_usdc(&env, &usdc_token, &donor, amount);
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 client.donate_usdc(&usdc_token, &donor, &project_id, &amount, &MSG_HASH);
@@ -816,7 +846,7 @@ mod fuzz {
         ) {
             let (env, client, project_id, usdc_token) = setup_usdc(u32::MAX);
             let donor = Address::generate(&env);
-            fund_usdc(&env, &usdc_token, &donor, &usdc_amount);
+            fund_usdc(&env, &usdc_token, &donor, usdc_amount);
 
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 client.donate_usdc(&usdc_token, &donor, &project_id, &usdc_amount, &MSG_HASH);
