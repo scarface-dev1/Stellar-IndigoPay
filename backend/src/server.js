@@ -54,16 +54,18 @@ const { AppError } = require("./errors");
 const { startTurretsServer } = require("./services/turrets");
 const { start: startSummaryQueue } = require("./services/summaryQueue");
 const { start: startProfileQueue } = require("./services/profileQueue");
-const {
-  start: startWebhookQueue,
+const { start: startWebhookQueue,
   stop: stopWebhookQueue,
 } = require("./services/webhookQueue");
 const { start: startPushQueue } = require("./services/pushQueue");
-const { start: startIdempotencyCleanup } = require("./services/idempotencyCleanup");
 const { startIndexer } = require("./services/indexerService");
 const { startReconciler, stopReconciler } = require("./services/indexerReconciler");
 const { startDLQWorker, stopDLQWorker } = require("./services/indexerDLQWorker");
 const lifecycle = require("./services/lifecycle");
+const {
+  start: startIdempotencyCleanup,
+  stop: stopIdempotencyCleanup,
+} = require("./services/idempotencyCleanup");
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN || "",
@@ -389,7 +391,14 @@ async function startServer() {
   await startProfileQueue(io);
   await startWebhookQueue();
   await startPushQueue();
-  await startIdempotencyCleanup();
+
+  // idempotency key cleanup cron (pg-boss)
+  await startIdempotencyCleanup().catch((err) => {
+    logger.warn(
+      { event: "idempotency_cleanup_start_failed", err: err.message },
+      "Idempotency cleanup cron could not be started",
+    );
+  });
 
   // digestQueue is optional in some deployments
   try {
@@ -448,9 +457,10 @@ async function startServer() {
   // Soroban event service: stop the polling loop and persist the cursor.
   lifecycle.onShutdown(async () => {
     try {
-      await stopSorobanEvents();
+      const sorobanEvents = require("./services/sorobanEvents");
+      if (typeof sorobanEvents.stop === "function") await sorobanEvents.stop();
     } catch {
-      // Service may already be stopped; swallow.
+      // Service may already be stopped or not loaded; swallow.
     }
   });
 

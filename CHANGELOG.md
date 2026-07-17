@@ -2,13 +2,15 @@
 
 ### Features
 
-* **backend,frontend:** add Idempotency-Key support for donation recording (closes #148)
-  - Accept `Idempotency-Key` header (UUID v4) on `POST /api/donations`; store response and replay within 24 hours
-  - New `idempotency_keys` table via migration 016 with index on `created_at`
-  - Hourly pg-boss cleanup cron (`idempotencyCleanup`) purges expired keys (configurable via `IDEMPOTENCY_CLEANUP_CRON`)
-  - Frontend: `DonateForm` and `bridge` generate `crypto.randomUUID()` per donation attempt
-  - Documented in OpenAPI spec with 200 replay response
-  - 11 new tests: 5 unit (donations), 8 unit (cleanup), 3 integration (testcontainers)
+* **backend:** add `Idempotency-Key` header support to `POST /api/donations` (closes #148)
+  - Add `idempotency_keys` table (migration 016, schema.sql) storing key, response status, JSONB body, created_at
+  - Add `validateIdempotencyKey()`, `lookupIdempotencyKey()`, `storeIdempotencyKey()` helpers in `donations.js`; replays cached response within 24-hour window
+  - Add `idempotencyCleanup.js` service — hourly pg-boss cron (`IDEMPOTENCY_CLEANUP_CRON`, default `5 * * * *`) that deletes rows older than 24 h; set to `"disabled"` to turn off
+  - Wire cleanup start + graceful-shutdown hook in `server.js`
+  - Update `frontend/lib/api.ts` `recordDonation()` to accept optional `idempotencyKey` and send it as `Idempotency-Key` header
+  - Update `DonateForm.tsx` and `bridge.tsx` to generate `crypto.randomUUID()` per attempt
+  - Document header parameter and 200 replay response in `docs/api/openapi.yaml`
+  - Add 8 unit tests (`idempotencyCleanup.test.js`), 3 testcontainers integration tests (`idempotencyCleanup.integration.test.js`), and 12 new idempotency test cases in `donations.test.js`
 
 * **docs:** add CONTRIBUTORS.md to credit community work (GF-015, closes #64)
 
