@@ -96,7 +96,7 @@ describe("ErrorBoundary", () => {
     const [error, info] = onError.mock.calls[0];
     expect(error).toBeInstanceOf(Error);
     expect(error.message).toBe("intentional render error");
-    expect(typeof info.componentStack).toBe("string");
+    expect(typeof info!.componentStack).toBe("string");
     spy.mockRestore();
   });
 
@@ -111,10 +111,12 @@ describe("ErrorBoundary", () => {
     // the mock resolves a promise we don't observe. Verify the call
     // happened with the correct arguments.
     expect(captureExceptionMock).toHaveBeenCalledTimes(1);
-    const [err, info] = captureExceptionMock.mock.calls[0];
+    const call = captureExceptionMock.mock.calls[0];
+    expect(call).toBeDefined();
+    const [err, info] = call!;
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toBe("intentional render error");
-    expect(typeof info.componentStack).toBe("string");
+    expect(typeof info!.componentStack).toBe("string");
     spy.mockRestore();
   });
 
