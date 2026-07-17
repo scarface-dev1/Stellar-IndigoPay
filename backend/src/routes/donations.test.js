@@ -226,7 +226,7 @@ describe("POST /api/donations", () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe("Invalid Stellar public key");
+    expect(res.body.error).toBe("Invalid Stellar address");
     expect(pool.connect).not.toHaveBeenCalled();
   });
 

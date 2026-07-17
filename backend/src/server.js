@@ -69,10 +69,6 @@ const { startIndexer } = require("./services/indexerService");
 const { startReconciler, stopReconciler } = require("./services/indexerReconciler");
 const { startDLQWorker, stopDLQWorker } = require("./services/indexerDLQWorker");
 const lifecycle = require("./services/lifecycle");
-const {
-  start: startIdempotencyCleanup,
-  stop: stopIdempotencyCleanup,
-} = require("./services/idempotencyCleanup");
 
 Sentry.init({
   dsn: process.env.SENTRY_DSN || "",
