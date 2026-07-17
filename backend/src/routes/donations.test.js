@@ -16,8 +16,8 @@ jest.mock("../services/profileQueue", () => ({
   enqueueProfileUpdate: jest.fn().mockResolvedValue(undefined),
 }));
 
-jest.mock("../services/matchQueue", () => ({
-  enqueueDonationMatching: jest.fn().mockResolvedValue("job-id"),
+jest.mock("../services/pushQueue", () => ({
+  enqueuePushNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
 const { server } = require("../services/stellar");
@@ -26,6 +26,7 @@ const { computeBadges } = require("../services/store");
 const { enqueueProfileUpdate } = require("../services/profileQueue");
 const { enqueueDonationMatching } = require("../services/matchQueue");
 const { recordDonation } = require("./donations");
+const { AppError } = require("../errors");
 
 function makePublicKey(char = "A") {
   return `G${char.repeat(55)}`;
@@ -73,14 +74,18 @@ function createMockResponse() {
   };
 }
 
-async function invokeRecordDonation(body) {
-  const req = { body };
+async function invokeRecordDonation(body, headers = {}) {
+  const req = { body, headers };
   const res = createMockResponse();
   const next = jest.fn((err) => {
     if (err) {
-      res
-        .status(err.status || 500)
-        .json({ error: err.message || "Internal server error" });
+      if (err instanceof AppError) {
+        res.status(err.status).json(err.toJSON());
+      } else {
+        res
+          .status(err.status || 500)
+          .json({ error: err.message || "Internal server error" });
+      }
     }
   });
 
@@ -222,7 +227,7 @@ describe("POST /api/donations", () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(404);
-    expect(res.body.error).toBe("Project not found");
+    expect(res.body.error.code).toBe("PROJECT_NOT_FOUND");
     expect(client.release).toHaveBeenCalledTimes(1);
   });
 
@@ -236,7 +241,7 @@ describe("POST /api/donations", () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe("Invalid Stellar public key");
+    expect(res.body.error.code).toBe("INVALID_ADDRESS");
     expect(pool.connect).not.toHaveBeenCalled();
   });
 
@@ -250,7 +255,7 @@ describe("POST /api/donations", () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe("Invalid transaction hash");
+    expect(res.body.error.code).toBe("INVALID_TX_HASH");
     expect(pool.connect).not.toHaveBeenCalled();
   });
 
@@ -332,7 +337,7 @@ describe("POST /api/donations", () => {
 
   test("calculates badges from cumulative donations across multiple requests", async () => {
     const donorAddress = makePublicKey("F");
-    const client = createMockClient(
+    createMockClient(
       queryResult([{ id: "project-3" }]), // SELECT project
       queryResult([]), // dedup check
       queryResult(), // BEGIN
@@ -381,7 +386,7 @@ describe("POST /api/donations", () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe("Transaction not confirmed on Stellar");
+    expect(res.body.error.code).toBe("TX_FAILED");
     // No DB write transaction should have been opened.
     expect(client.query).not.toHaveBeenCalledWith("BEGIN");
     expect(client.release).toHaveBeenCalledTimes(1);
@@ -403,7 +408,7 @@ describe("POST /api/donations", () => {
 
     expect(next).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(400);
-    expect(res.body.error).toBe("Transaction not found on Stellar");
+    expect(res.body.error.code).toBe("TX_NOT_FOUND");
     expect(client.query).not.toHaveBeenCalledWith("BEGIN");
     expect(client.release).toHaveBeenCalledTimes(1);
   });
@@ -506,7 +511,7 @@ describe("profile upsert on first donation", () => {
       created_at: "2026-03-29T10:00:00.000Z",
     };
 
-    const client = createMockClient(
+    createMockClient(
       queryResult([{ id: "project-p" }]),
       queryResult([]),
       queryResult(),
@@ -543,7 +548,7 @@ describe("profile upsert on first donation", () => {
       created_at: "2026-03-29T10:00:00.000Z",
     };
 
-    const client = createMockClient(
+    createMockClient(
       queryResult([{ id: "project-q" }]),
       queryResult([]),
       queryResult(),
@@ -589,7 +594,7 @@ describe("profile upsert on first donation", () => {
       created_at: "2026-03-29T10:00:00.000Z",
     };
 
-    const client = createMockClient(
+    createMockClient(
       queryResult([{ id: "project-r" }]),
       queryResult([]),
       queryResult(),
@@ -612,3 +617,4 @@ describe("profile upsert on first donation", () => {
     expect(enqueueProfileUpdate).toHaveBeenCalledWith(donorAddress);
   });
 });
+
