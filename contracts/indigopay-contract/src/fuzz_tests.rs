@@ -700,49 +700,7 @@ mod fuzz {
             prop_assert_eq!(proposal.votes_against, 0u32);
         }
 
-        #[test]
-        fn prop_badge_weighted_voting_seedling_and_earth_guardian(
-            _dummy in 0..1,
-        ) {
-            let (env, admin, client, project_id) = setup_with_admin();
-            client.create_proposal(&admin, &project_id, &720u32);
 
-            let token_admin = Address::generate(&env);
-            let token = env
-                .register_stellar_asset_contract_v2(token_admin)
-                .address();
-
-            let donor_seedling = Address::generate(&env);
-            let amt_seedling = 10i128 * STROOP;
-            mint_tokens(&env, &token, &donor_seedling, amt_seedling);
-            client.donate(&token, &donor_seedling, &project_id, &amt_seedling, &42u32);
-
-            client.vote_verify_project(&donor_seedling, &project_id, &true);
-
-            let donor_earth = Address::generate(&env);
-            let amt_earth = 2000i128 * STROOP;
-            mint_tokens(&env, &token, &donor_earth, amt_earth);
-            client.donate(&token, &donor_earth, &project_id, &amt_earth, &42u32);
-
-            client.vote_verify_project(&donor_earth, &project_id, &true);
-
-            let proposal = client.get_proposal(&project_id);
-            prop_assert_eq!(proposal.votes_for, 26u32);
-        }
-
-        #[test]
-        fn prop_badge_weighted_voting_none_tier_panics(
-            _dummy in 0..1,
-        ) {
-            let (env, admin, client, project_id) = setup_with_admin();
-            client.create_proposal(&admin, &project_id, &720u32);
-
-            let voter = Address::generate(&env);
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                client.vote_verify_project(&voter, &project_id, &true);
-            }));
-            prop_assert!(result.is_err(), "None tier voter should panic");
-        }
 
         #[test]
         fn prop_fuzz_badge_weighted_voting(
@@ -909,5 +867,43 @@ mod fuzz {
             }));
             prop_assert!(result.is_err(), "donate_usdc should panic on CO2 overflow");
         }
+    } // END of proptest!
+
+    #[test]
+    fn test_badge_weighted_voting_seedling_and_earth_guardian() {
+        let (env, admin, client, project_id) = setup_with_admin();
+        client.create_proposal(&admin, &project_id, &720u32);
+
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+
+        let donor_seedling = Address::generate(&env);
+        let amt_seedling = 10i128 * STROOP;
+        mint_tokens(&env, &token, &donor_seedling, amt_seedling);
+        client.donate(&token, &donor_seedling, &project_id, &amt_seedling, &42u32);
+
+        client.vote_verify_project(&donor_seedling, &project_id, &true);
+
+        let donor_earth = Address::generate(&env);
+        let amt_earth = 2000i128 * STROOP;
+        mint_tokens(&env, &token, &donor_earth, amt_earth);
+        client.donate(&token, &donor_earth, &project_id, &amt_earth, &42u32);
+
+        client.vote_verify_project(&donor_earth, &project_id, &true);
+
+        let proposal = client.get_proposal(&project_id);
+        assert_eq!(proposal.votes_for, 26u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "None tier voter should panic")]
+    fn test_badge_weighted_voting_none_tier_panics() {
+        let (env, admin, client, project_id) = setup_with_admin();
+        client.create_proposal(&admin, &project_id, &720u32);
+
+        let voter = Address::generate(&env);
+        client.vote_verify_project(&voter, &project_id, &true);
     }
 }
