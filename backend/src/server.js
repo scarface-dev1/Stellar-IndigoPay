@@ -66,6 +66,7 @@ const {
 const { start: startPushQueue } = require("./services/pushQueue");
 const { start: startIdempotencyCleanup } = require("./services/idempotencyCleanup");
 const { start: startBlacklistCleanup } = require("./services/blacklistCleanup");
+const { startCO2VerificationCron, stopCO2VerificationCron } = require("./services/co2Verifier");
 const { startIndexer } = require("./services/indexerService");
 const { startReconciler, stopReconciler } = require("./services/indexerReconciler");
 const { startDLQWorker, stopDLQWorker } = require("./services/indexerDLQWorker");
@@ -438,6 +439,7 @@ async function startServer() {
   await startPushQueue();
   await startIdempotencyCleanup();
   await startBlacklistCleanup();
+  await startCO2VerificationCron();
 
   // digestQueue is optional in some deployments
   try {
@@ -540,6 +542,7 @@ async function startServer() {
     "./services/pushQueue",
     "./services/idempotencyCleanup",
     "./services/blacklistCleanup",
+    "./services/co2Verifier",
   ]) {
     lifecycle.onShutdown(async () => {
       try {
@@ -550,6 +553,15 @@ async function startServer() {
       }
     });
   }
+
+  // CO2 verification cron: stop the pg-boss instance gracefully.
+  lifecycle.onShutdown(async () => {
+    try {
+      if (typeof stopCO2VerificationCron === "function") await stopCO2VerificationCron();
+    } catch {
+      // Module may not be loaded; swallow.
+    }
+  });
 
   // Socket.IO: stop accepting new connections, wait for in-flight, then close.
   lifecycle.onShutdown(async () => {
