@@ -20,6 +20,10 @@ jest.mock("../services/pushQueue", () => ({
   enqueuePushNotification: jest.fn().mockResolvedValue(undefined),
 }));
 
+jest.mock("../services/matchQueue", () => ({
+  enqueueDonationMatching: jest.fn().mockResolvedValue("job-id"),
+}));
+
 const { server } = require("../services/stellar");
 const pool = require("../db/pool");
 const { computeBadges } = require("../services/store");

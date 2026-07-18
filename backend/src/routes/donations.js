@@ -14,6 +14,7 @@ const { enqueueProfileUpdate } = require("../services/profileQueue");
 const { enqueuePushNotification } = require("../services/pushQueue");
 const { server } = require("../services/stellar");
 const { AppError } = require("../errors");
+const { enqueueDonationMatching } = require("../services/matchQueue");
 const donationLimiter = createRateLimiter(10, 1); // 10 requests per minute
 
 // Local EventEmitter used by both the POST /api/donations handler and the

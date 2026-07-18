@@ -20,6 +20,7 @@ const { checkAndDeliverMilestones } = require("./webhook");
 const { Counter } = require("prom-client");
 const { registry } = require("./metrics");
 const logger = require("../logger");
+const { enqueueDonationMatching } = require("./matchQueue");
 
 // Prometheus metric for tracking processed donations
 const indexerDonationsProcessed = new Counter({
@@ -163,6 +164,16 @@ async function handleDonation(projectId, op, { isNative, isUSDC, isBackfill = fa
     );
 
     checkAndDeliverMilestones(projectId).catch(() => {});
+
+    if (isNative) {
+      enqueueDonationMatching(projectId, amount, donorAddress, txHash)
+        .catch((err) => {
+          logger.error(
+            { event: "matching_enqueue_failed", err, projectId, donorAddress },
+            "Failed to enqueue donation matching job",
+          );
+        });
+    }
 
     return { donationId, amount, currency, source };
   } catch (err) {
