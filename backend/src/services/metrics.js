@@ -253,6 +253,15 @@ const pushLatencySeconds = new client.Histogram({
   registers: [registry],
 });
 
+// ── Postgres failover metrics ─────────────────────────────────────────────
+
+const postgresFailoverTotal = new client.Counter({
+  name: "indigopay_postgres_failover_total",
+  help: "Total number of Postgres failover events, labelled by outcome.",
+  labelNames: ["outcome"], // initiated, succeeded, failed
+  registers: [registry],
+});
+
 /**
  * Normalise an Express req.route.path / req.path to a low-cardinality
  * route label. We fall back to the literal path when no route is
@@ -405,5 +414,6 @@ module.exports = {
     queueLatency,
     pushSentTotal,
     pushLatencySeconds,
+    postgresFailoverTotal,
   },
 };

@@ -116,6 +116,37 @@ groups:
           summary: "Database backup verification failed"
           description: "The nightly backup at {{ $labels.backup_path }} failed verification. Investigate immediately — the backup may be corrupt or unrecoverable."
 
+  - name: stellar-indigopay-postgres-failover-info
+    interval: 30s
+    rules:
+      - alert: PostgresFailoverSucceeded
+        expr: increase(indigopay_postgres_failover_total{outcome="succeeded"}[10m]) > 0
+        for: 0m
+        labels:
+          severity: warn
+        annotations:
+          summary: "Postgres failover completed successfully"
+          description: |
+            Standby was promoted to primary. Backend has been restarted.
+            The old primary should be investigated and re-synced before
+            attempting manual failback.
+            New primary host: check POSTGRES_PRIMARY_HOST in stellar-indigopay-config ConfigMap.
+
+      - alert: PostgresPrimaryUnhealthy
+        expr: |
+          up{job="stellar-indigopay-postgres-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          routing: pagerduty
+        annotations:
+          summary: "Postgres primary exporter is down"
+          description: |
+            The postgres-exporter scraping the primary is unreachable.
+            If the primary is genuinely down, the healthcheck sidecar will
+            trigger automated failover within 30 s.
+            Check: kubectl get pods -n stellar-indigopay -l app=postgres,role=primary
+
   - name: stellar-indigopay-backend-readiness
     interval: 30s
     rules:
