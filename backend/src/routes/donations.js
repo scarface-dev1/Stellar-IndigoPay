@@ -6,24 +6,28 @@ const EventEmitter = require("events");
 const express = require("express");
 const router = express.Router();
 const { v4: uuid } = require("uuid");
+const { z } = require("zod");
 const logger = require("../logger");
 const pool = require("../db/pool");
+const { AppError } = require("../errors");
 const { createRateLimiter } = require("../middleware/rateLimiter");
+const { validate } = require("../middleware/validate");
+const idempotencyMiddleware = require("../middleware/idempotency");
+const {
+  donationSchema,
+  stellarAddress,
+  uuid: uuidValidator,
+} = require("../validators/schemas");
 const { mapDonationRow } = require("../services/store");
 const { enqueueProfileUpdate } = require("../services/profileQueue");
 const { enqueuePushNotification } = require("../services/pushQueue");
 const { server } = require("../services/stellar");
-const { AppError } = require("../errors");
-const { enqueueDonationMatching } = require("../services/matchQueue");
 const donationLimiter = createRateLimiter(10, 1); // 10 requests per minute
 
 // Local EventEmitter used by both the POST /api/donations handler and the
 // GET /api/donations/stream SSE endpoint to broadcast new donations in
 // real time without going through Socket.IO.
 const donationEvents = new EventEmitter();
-
-// Idempotency key expiry: 24 hours in milliseconds
-const IDEMPOTENCY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 
 function validateKey(k) {
   if (!k || !/^G[A-Z0-9]{55}$/.test(k)) {
@@ -38,71 +42,12 @@ function validateTxHash(h) {
 }
 
 /**
- * Validate that the idempotency key is a well-formed UUID v4.
- * Returns true if valid, throws 400 otherwise.
- */
-function validateIdempotencyKey(key) {
-  if (!key || typeof key !== "string" || key.length > 255) {
-    const e = new Error("Invalid Idempotency-Key header");
-    e.status = 400;
-    throw e;
-  }
-  // Must be a valid UUID v4
-  if (
-    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      key,
-    )
-  ) {
-    const e = new Error(
-      "Idempotency-Key must be a valid UUID v4",
-    );
-    e.status = 400;
-    throw e;
-  }
-  return true;
-}
-
-/**
- * Check the idempotency_keys table for an existing, unexpired entry.
- * Returns the cached response body if found, or null when the key is
- * new or expired (the expired row is deleted in-place).
- */
-async function lookupIdempotencyKey(client, key) {
-  const result = await client.query(
-    "SELECT response_status, response_body, created_at FROM idempotency_keys WHERE key = $1",
-    [key],
-  );
-
-  if (!result.rows[0]) return null;
-
-  const { response_status, response_body, created_at } = result.rows[0];
-  const age = Date.now() - new Date(created_at).getTime();
-
-  if (age > IDEMPOTENCY_KEY_TTL_MS) {
-    // Key expired — remove it and treat as new
-    await client.query("DELETE FROM idempotency_keys WHERE key = $1", [key]);
-    return null;
-  }
-
-  return { status: response_status, body: response_body };
-}
-
-/**
- * Persist the idempotency key with the response for future replays.
- * Uses INSERT … ON CONFLICT DO NOTHING to be safe against concurrent
- * requests that might have raced to store the same key.
- */
-async function storeIdempotencyKey(client, key, status, body) {
-  await client.query(
-    `INSERT INTO idempotency_keys (key, response_status, response_body)
-     VALUES ($1, $2, $3)
-     ON CONFLICT (key) DO NOTHING`,
-    [key, status, JSON.stringify(body)],
-  );
-}
-
-/**
  * Record a donation after an on-chain transaction is observed.
+ *
+ * Supports an optional `Idempotency-Key` request header (UUID v4).  When
+ * supplied, the server stores the response and replays it on duplicate
+ * requests within a 24-hour window, preventing double-recording of the same
+ * donation.
  *
  * @route POST /api/donations
  * @param {import('express').Request} req - Express request containing the donation payload.
@@ -128,29 +73,15 @@ async function recordDonation(req, res, next) {
       conversionPath,
       convertedAmountXLM,
     } = req.body;
-    validateKey(donorAddress);
-    validateTxHash(transactionHash);
 
-    // ── Idempotency-Key support ──────────────────────────────────────────
-    // Clients can send an Idempotency-Key header (UUID v4) to safely retry
-    // donation recording without creating duplicate records. The server
-    // stores the response keyed by this header and replays it on subsequent
-    // requests with the same key within 24 hours.
-    const idempotencyKey = req.headers?.["idempotency-key"];
-    if (idempotencyKey) {
-      validateIdempotencyKey(idempotencyKey);
-
-      if (!client) client = await pool.connect();
-
-      const cached = await lookupIdempotencyKey(client, idempotencyKey);
-      if (cached) {
-        client.release();
-        client = null; // prevent double-release in the finally block
-        return res.status(cached.status).json(cached.body);
-      }
+    if (!donorAddress || !/^G[A-Z0-9]{55}$/.test(donorAddress)) {
+      throw new AppError("INVALID_ADDRESS");
+    }
+    if (!transactionHash || !/^[a-fA-F0-9]{64}$/.test(transactionHash)) {
+      throw new AppError("INVALID_TX_HASH");
     }
 
-    if (!client) client = await pool.connect();
+    client = await pool.connect();
 
     const projectResult = await client.query(
       "SELECT id FROM projects WHERE id = $1",
@@ -165,10 +96,7 @@ async function recordDonation(req, res, next) {
       currency === "XLM" ? (amountXLM ?? amount) : amount,
     );
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "amount",
-        detail: "Invalid amount",
-      });
+      throw new AppError("VALIDATION_ERROR", { field: "amount" });
     }
 
     // Deduplicate by tx hash
@@ -177,15 +105,13 @@ async function recordDonation(req, res, next) {
       [transactionHash],
     );
     if (existingResult.rows[0]) {
-      const dedupResponse = {
+      return res.json({
         success: true,
+        // Flag replayed idempotency keys so the client can treat the
+        // submission as already-completed instead of re-queuing it.
+        duplicate: true,
         data: mapDonationRow(existingResult.rows[0]),
-      };
-      // Store idempotency key for future replays if provided
-      if (idempotencyKey) {
-        await storeIdempotencyKey(client, idempotencyKey, 200, dedupResponse);
-      }
-      return res.json(dedupResponse);
+      });
     }
 
     // Verify the transaction is confirmed on-chain before recording it.
@@ -197,9 +123,7 @@ async function recordDonation(req, res, next) {
       throw new AppError("TX_NOT_FOUND");
     }
     if (!onChainTx || onChainTx.successful !== true) {
-      throw new AppError("TX_FAILED", {
-        detail: "Transaction not confirmed on Stellar",
-      });
+      throw new AppError("TX_FAILED");
     }
 
     await client.query("BEGIN");
@@ -216,7 +140,7 @@ async function recordDonation(req, res, next) {
         uuid(),
         projectId,
         donorAddress,
-        currency === "XLM" ? parsedAmount : (convertedAmountXLM || null),
+        currency === "XLM" ? parsedAmount : (convertedAmountXLM ? parseFloat(convertedAmountXLM) : null),
         parsedAmount,
         currency,
         message?.trim().slice(0, 100) || null,
@@ -231,14 +155,14 @@ async function recordDonation(req, res, next) {
       id: uuid(),
       project_id: projectId,
       donor_address: donorAddress,
-      amount_xlm: currency === "XLM" ? parsedAmount : (convertedAmountXLM || null),
+      amount_xlm: currency === "XLM" ? parsedAmount : (convertedAmountXLM ? parseFloat(convertedAmountXLM) : null),
       amount: parsedAmount,
       currency,
       message: message?.trim().slice(0, 100) || null,
       transaction_hash: transactionHash,
       source_asset: sourceAsset || null,
       conversion_path: conversionPath || null,
-      converted_amount_xlm: convertedAmountXLM || null,
+      converted_amount_xlm: convertedAmountXLM ? parseFloat(convertedAmountXLM) : null,
       created_at: new Date().toISOString(),
     };
 
@@ -330,12 +254,6 @@ async function recordDonation(req, res, next) {
     donationEvents.emit("new_donation", mappedDonation);
 
     const responseBody = { success: true, data: mappedDonation };
-
-    // Store idempotency key for future replays if provided
-    if (idempotencyKey) {
-      await storeIdempotencyKey(client, idempotencyKey, 201, responseBody);
-    }
-
     res.status(201).json(responseBody);
   } catch (e) {
     if (inTransaction && client) await client.query("ROLLBACK");
@@ -355,7 +273,7 @@ async function recordDonation(req, res, next) {
  * @returns {Promise<void>} Sends the created donation payload.
  * @throws {Error} If rate limiting or donation creation fails.
  */
-router.post("/", donationLimiter, recordDonation);
+router.post("/", donationLimiter, idempotencyMiddleware, validate(donationSchema), recordDonation);
 
 // GET /api/donations/stream
 router.get("/stream", (req, res) => {
@@ -452,20 +370,22 @@ router.get("/project/:projectId", async (req, res, next) => {
  * @returns {Promise<void>} Sends the donor donation history.
  * @throws {Error} If validation or the donation query fails.
  */
-router.get("/donor/:publicKey", async (req, res, next) => {
-  try {
-    validateKey(req.params.publicKey);
-    const result = await pool.query(
-      `SELECT * FROM donations
+router.get(
+  "/donor/:publicKey",
+  validate(z.object({ publicKey: stellarAddress }), "params"),
+  async (req, res, next) => {
+    try {
+      const result = await pool.query(
+        `SELECT * FROM donations
        WHERE donor_address = $1
        ORDER BY created_at DESC`,
-      [req.params.publicKey],
-    );
-    res.json({ success: true, data: result.rows.map(mapDonationRow) });
-  } catch (e) {
-    next(e);
-  }
-});
+        [req.params.publicKey],
+      );
+      res.json({ success: true, data: result.rows.map(mapDonationRow) });
+    } catch (e) {
+      next(e);
+    }
+  });
 
 // GET /api/donations/:id - single donation fetch endpoint
 router.get("/:id", async (req, res, next) => {
@@ -477,10 +397,7 @@ router.get("/:id", async (req, res, next) => {
         id,
       )
     ) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "id",
-        detail: "Invalid donation ID",
-      });
+      throw new AppError("VALIDATION_ERROR", { field: "id", message: "Invalid donation ID" });
     }
 
     const USDC_TO_XLM_RATE = parseFloat(process.env.USDC_TO_XLM_RATE || "8.0");
@@ -506,7 +423,6 @@ router.get("/:id", async (req, res, next) => {
     if (!result.rows[0]) {
       throw new AppError("DONATION_NOT_FOUND");
     }
-
     const row = result.rows[0];
     const donationData = mapDonationRow(row);
     donationData.projectName = row.project_name;

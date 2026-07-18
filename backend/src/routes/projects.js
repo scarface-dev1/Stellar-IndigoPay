@@ -8,6 +8,12 @@ const router = express.Router();
 const { v4: uuid } = require("uuid");
 const QRCode = require("qrcode");
 const pool = require("../db/pool");
+const { validate } = require("../middleware/validate");
+const {
+  stellarAddress,
+  uuid: uuidValidator,
+  projectSubmissionSchema,
+} = require("../validators/schemas");
 const { logAdminAction } = require("../services/audit");
 const {
   mapProjectRow,
@@ -432,60 +438,17 @@ router.get("/", async (req, res, next) => {
  * @returns {Promise<void>} Sends the created project payload.
  * @throws {Error} If validation or database insertion fails.
  */
-router.post("/", async (req, res, next) => {
+router.post("/", validate(projectSubmissionSchema), async (req, res, next) => {
   try {
     const {
       name,
       description,
       location,
       category,
-      wallet_address,
-      goal_xlm = 0,
+      walletAddress,
+      goalXLM = 0,
       tags = [],
     } = req.body || {};
-
-    if (
-      !name ||
-      typeof name !== "string" ||
-      name.trim().length < 3 ||
-      name.trim().length > 120
-    ) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "name",
-        detail: "name must be between 3 and 120 characters",
-      });
-    }
-    if (
-      !description ||
-      typeof description !== "string" ||
-      description.trim().length < 10 ||
-      description.trim().length > 5000
-    ) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "description",
-        detail: "description must be between 10 and 5000 characters",
-      });
-    }
-    if (
-      !location ||
-      typeof location !== "string" ||
-      location.trim().length < 2 ||
-      location.trim().length > 200
-    ) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "location",
-        detail: "location must be between 2 and 200 characters",
-      });
-    }
-    if (!category || !VALID_CATEGORIES.includes(category)) {
-      throw new AppError("VALIDATION_ERROR", {
-        field: "category",
-        detail: `category must be one of: ${VALID_CATEGORIES.join(", ")}`,
-      });
-    }
-    if (!wallet_address || typeof wallet_address !== "string") {
-      throw new AppError("VALIDATION_ERROR", { field: "wallet_address" });
-    }
 
     const id = uuid();
     const result = await pool.query(
@@ -498,8 +461,8 @@ router.post("/", async (req, res, next) => {
         description.trim(),
         category,
         location.trim(),
-        wallet_address,
-        goal_xlm,
+        walletAddress,
+        goalXLM,
         tags,
       ],
     );
@@ -1074,8 +1037,8 @@ router.post("/:id/follow", async (req, res, next) => {
     // INSERT … ON CONFLICT DO NOTHING makes this idempotent.
     await pool.query(
       `INSERT INTO project_follows (project_id, wallet_address, created_at)
-       VALUES ($1, $2, NOW())
-       ON CONFLICT (project_id, wallet_address) DO NOTHING`,
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (project_id, wallet_address) DO NOTHING`,
       [req.params.id, walletAddress],
     );
 
@@ -1094,7 +1057,8 @@ router.post("/:id/follow", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+},
+);
 
 /**
  * DELETE /api/projects/:id/follow
@@ -1136,7 +1100,8 @@ router.delete("/:id/follow", async (req, res, next) => {
   } catch (e) {
     next(e);
   }
-});
+},
+);
 
 /**
  * POST /api/projects/:id/generate-summary
@@ -1556,7 +1521,8 @@ router.get("/:id/badge-holders", async (req, res, next) => {
     const uuidRegex =
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRegex.test(projectId)) {
-      throw new AppError("PROJECT_NOT_FOUND");
+      const err = new AppError("PROJECT_NOT_FOUND");
+      return res.status(400).json(err.toJSON());
     }
 
     const projectResult = await pool.query(
