@@ -11,6 +11,7 @@ const logger = require("../logger");
 const pool = require("../db/pool");
 const { createRateLimiter } = require("../middleware/rateLimiter");
 const { validate } = require("../middleware/validate");
+const idempotencyMiddleware = require("../middleware/idempotency");
 const {
   donationSchema,
   stellarAddress,
@@ -28,17 +29,6 @@ const donationLimiter = createRateLimiter(10, 1); // 10 requests per minute
 // real time without going through Socket.IO.
 const donationEvents = new EventEmitter();
 
-function validateKey(k) {
-  if (!k || !/^G[A-Z0-9]{55}$/.test(k)) {
-    throw new AppError("INVALID_ADDRESS");
-  }
-}
-
-function validateTxHash(h) {
-  if (!h || !/^[a-fA-F0-9]{64}$/.test(h)) {
-    throw new AppError("INVALID_TX_HASH");
-  }
-}
 
 /**
  * Record a donation after an on-chain transaction is observed.
@@ -67,10 +57,15 @@ async function recordDonation(req, res, next) {
       conversionPath,
       convertedAmountXLM,
     } = req.body;
-    validateKey(donorAddress);
-    validateTxHash(transactionHash);
 
-    client = await pool.connect();
+    if (!donorAddress || !/^G[A-Z0-9]{55}$/.test(donorAddress)) {
+      throw new AppError("INVALID_ADDRESS");
+    }
+    if (!transactionHash || !/^[a-fA-F0-9]{64}$/.test(transactionHash)) {
+      throw new AppError("INVALID_TX_HASH");
+    }
+
+    if (!client) client = await pool.connect();
 
     const projectResult = await client.query(
       "SELECT id FROM projects WHERE id = $1",
@@ -96,11 +91,12 @@ async function recordDonation(req, res, next) {
       "SELECT * FROM donations WHERE transaction_hash = $1",
       [transactionHash],
     );
-    if (existingResult.rows[0])
+    if (existingResult.rows[0]) {
       return res.json({
         success: true,
         data: mapDonationRow(existingResult.rows[0]),
       });
+    }
 
     // Verify the transaction is confirmed on-chain before recording it.
     // Prevents a caller from inflating raised_xlm with a fake or unconfirmed tx hash.
@@ -273,7 +269,8 @@ async function recordDonation(req, res, next) {
     const mappedDonation = mapDonationRow(donationResult.rows[0]);
     donationEvents.emit("new_donation", mappedDonation);
 
-    res.status(201).json({ success: true, data: mappedDonation });
+    const responseBody = { success: true, data: mappedDonation };
+    res.status(201).json(responseBody);
   } catch (e) {
     if (inTransaction && client) await client.query("ROLLBACK");
     next(e);
@@ -292,7 +289,7 @@ async function recordDonation(req, res, next) {
  * @returns {Promise<void>} Sends the created donation payload.
  * @throws {Error} If rate limiting or donation creation fails.
  */
-router.post("/", donationLimiter, validate(donationSchema), recordDonation);
+router.post("/", donationLimiter, idempotencyMiddleware, validate(donationSchema), recordDonation);
 
 // GET /api/donations/stream
 router.get("/stream", (req, res) => {
