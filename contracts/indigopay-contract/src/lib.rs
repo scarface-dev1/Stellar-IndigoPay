@@ -334,6 +334,9 @@ pub enum DataKey {
     // balance concept. #277's deposit logic must increment this key on
     // deposit. See SECURITY.md and #277 for coordination notes.
     ProjectContractBalance(String, Address),
+    // Vote delegation
+    VoteDelegation(Address),
+    DelegatedWeight(Address),
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -504,10 +507,33 @@ fn apply_campaign_goal_progress(project: &mut Project) -> bool {
 fn voting_weight_from_badge(badge: &BadgeTier) -> u32 {
     match badge {
         BadgeTier::None => 0,
-        BadgeTier::Seedling => 1,
-        BadgeTier::Tree => 3,
-        BadgeTier::Forest => 10,
-        BadgeTier::EarthGuardian => 25,
+        BadgeTier::Seedling => 100,
+        BadgeTier::Tree => 141,
+        BadgeTier::Forest => 173,
+        BadgeTier::EarthGuardian => 200,
+    }
+}
+
+fn update_delegated_weight_if_needed(
+    env: &Env,
+    donor: &Address,
+    prev_badge: &BadgeTier,
+    new_badge: &BadgeTier,
+) {
+    if prev_badge != new_badge {
+        let old_weight = voting_weight_from_badge(prev_badge);
+        let new_weight = voting_weight_from_badge(new_badge);
+        if new_weight > old_weight {
+            let key = DataKey::VoteDelegation(donor.clone());
+            if let Some(delegate) = env.storage().instance().get::<_, Address>(&key) {
+                let del_key = DataKey::DelegatedWeight(delegate.clone());
+                let mut del_weight: u32 = env.storage().instance().get(&del_key).unwrap_or(0);
+                del_weight = del_weight
+                    .checked_add(new_weight - old_weight)
+                    .expect("Delegated weight overflow");
+                env.storage().instance().set(&del_key, &del_weight);
+            }
+        }
     }
 }
 
@@ -1038,6 +1064,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
@@ -1226,6 +1253,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
@@ -1624,20 +1652,129 @@ impl IndigoPayContract {
         let stats: DonorStats = env
             .storage()
             .instance()
-            .get(&DataKey::DonorStats(voter))
+            .get(&DataKey::DonorStats(voter.clone()))
             .unwrap_or(DonorStats {
                 total_donated: 0,
                 donation_count: 0,
                 badge: BadgeTier::None,
                 co2_offset_grams: 0,
             });
-        voting_weight_from_badge(&stats.badge)
+        let own_weight = voting_weight_from_badge(&stats.badge);
+        let delegated_weight: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DelegatedWeight(voter))
+            .unwrap_or(0);
+        own_weight
+            .checked_add(delegated_weight)
+            .expect("Weight overflow")
+    }
+
+    pub fn delegate_vote(env: Env, donor: Address, delegate: Address) {
+        donor.require_auth();
+        require_not_paused(&env);
+        
+        if donor == delegate {
+            panic!("Cannot delegate to self");
+        }
+
+        let del_key = DataKey::VoteDelegation(donor.clone());
+        let old_delegate: Option<Address> = env.storage().instance().get(&del_key);
+
+        if let Some(ref old) = old_delegate {
+            if *old == delegate {
+                panic!("Already delegated to this address");
+            }
+        }
+
+        let donor_stats: DonorStats = env
+            .storage()
+            .instance()
+            .get(&DataKey::DonorStats(donor.clone()))
+            .unwrap_or(DonorStats {
+                total_donated: 0,
+                donation_count: 0,
+                badge: BadgeTier::None,
+                co2_offset_grams: 0,
+            });
+            
+        let weight = voting_weight_from_badge(&donor_stats.badge);
+
+        if let Some(old) = old_delegate {
+            let old_del_key = DataKey::DelegatedWeight(old.clone());
+            let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
+            old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
+            env.storage().instance().set(&old_del_key, &old_weight);
+        }
+
+        let new_del_key = DataKey::DelegatedWeight(delegate.clone());
+        let mut new_weight: u32 = env.storage().instance().get(&new_del_key).unwrap_or(0);
+        new_weight = new_weight.checked_add(weight).expect("Weight overflow");
+        
+        env.storage().instance().set(&new_del_key, &new_weight);
+        env.storage().instance().set(&del_key, &delegate);
+
+        env.events()
+            .publish((symbol_short!("delegate"), donor), delegate);
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    pub fn revoke_delegation(env: Env, donor: Address) {
+        donor.require_auth();
+        require_not_paused(&env);
+
+        let del_key = DataKey::VoteDelegation(donor.clone());
+        let delegate: Option<Address> = env.storage().instance().get(&del_key);
+
+        if let Some(del) = delegate {
+            let donor_stats: DonorStats = env
+                .storage()
+                .instance()
+                .get(&DataKey::DonorStats(donor.clone()))
+                .unwrap_or(DonorStats {
+                    total_donated: 0,
+                    donation_count: 0,
+                    badge: BadgeTier::None,
+                    co2_offset_grams: 0,
+                });
+                
+            let weight = voting_weight_from_badge(&donor_stats.badge);
+
+            let old_del_key = DataKey::DelegatedWeight(del.clone());
+            let mut old_weight: u32 = env.storage().instance().get(&old_del_key).unwrap_or(0);
+            old_weight = old_weight.checked_sub(weight).expect("Weight underflow");
+            env.storage().instance().set(&old_del_key, &old_weight);
+            
+            env.storage().instance().remove(&del_key);
+            
+            env.events()
+                .publish((symbol_short!("revoke"), donor), ());
+            ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+        } else {
+            panic!("No active delegation to revoke");
+        }
+    }
+
+    pub fn get_delegate(env: Env, donor: Address) -> Option<Address> {
+        env.storage().instance().get(&DataKey::VoteDelegation(donor))
+    }
+
+    pub fn get_delegated_weight(env: Env, delegate: Address) -> u32 {
+        env.storage().instance().get(&DataKey::DelegatedWeight(delegate)).unwrap_or(0)
     }
 
     /// Badge holders (≥ Seedling) cast a vote. One vote per address per proposal.
     pub fn vote_verify_project(env: Env, voter: Address, project_id: String, approve: bool) {
         voter.require_auth();
         require_not_paused(&env);
+
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::VoteDelegation(voter.clone()))
+        {
+            panic!("Must revoke delegation before voting directly");
+        }
 
         let stats: DonorStats = env
             .storage()
@@ -1649,11 +1786,20 @@ impl IndigoPayContract {
                 badge: BadgeTier::None,
                 co2_offset_grams: 0,
             });
-        if stats.badge == BadgeTier::None {
-            panic!("Only badge holders (Seedling or above) can vote");
-        }
 
-        let weight = voting_weight_from_badge(&stats.badge);
+        let own_weight = voting_weight_from_badge(&stats.badge);
+        let delegated_weight: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DelegatedWeight(voter.clone()))
+            .unwrap_or(0);
+        let weight = own_weight
+            .checked_add(delegated_weight)
+            .expect("Weight overflow");
+
+        if weight == 0 {
+            panic!("Only badge holders (Seedling or above) or active delegates can vote");
+        }
 
         let mut proposal: VoteProposal = env
             .storage()
@@ -1880,6 +2026,7 @@ impl IndigoPayContract {
             .checked_add(co2_increment)
             .expect("Donor co2_offset overflow");
         donor_stats.badge = calculate_badge(donor_stats.total_donated);
+        update_delegated_weight_if_needed(&env, &donor, &prev_badge, &donor_stats.badge);
         env.storage()
             .instance()
             .set(&DataKey::DonorStats(donor.clone()), &donor_stats);
@@ -3140,12 +3287,12 @@ mod tests {
         grant_badge(&env, &cid, &voter);
         client.vote_verify_project(&voter, &pid, &true);
         let p = client.get_proposal(&pid);
-        assert_eq!(p.votes_for, 1);
+        assert_eq!(p.votes_for, 100);
         assert_eq!(p.votes_against, 0);
     }
 
     #[test]
-    #[should_panic(expected = "Only badge holders (Seedling or above) can vote")]
+    #[should_panic(expected = "Only badge holders (Seedling or above) or active delegates can vote")]
     fn test_non_badge_holder_cannot_vote() {
         let (env, _cid, client, admin, pid) = setup();
         client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
@@ -3179,8 +3326,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 2);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 200);
+        assert_eq!(p.votes_against, 100);
     }
 
     #[test]
@@ -3198,8 +3345,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 2);
+        assert_eq!(p.votes_for, 100);
+        assert_eq!(p.votes_against, 200);
     }
 
     #[test]
@@ -3219,8 +3366,8 @@ mod tests {
 
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 100);
+        assert_eq!(p.votes_against, 100);
 
         // A tie (1 for, 1 against) produces a rejection outcome.
         // Event-level assertion is intentionally skipped here because the
@@ -3414,7 +3561,7 @@ mod tests {
         client.vote_verify_project(&voter, &pid, &true);
 
         let proposal = client.get_proposal(&pid);
-        assert_eq!(proposal.votes_for, 1);
+        assert_eq!(proposal.votes_for, 100);
     }
 
     /// Test minimum voting duration enforcement (issue #209).
@@ -3437,7 +3584,7 @@ mod tests {
         client.vote_verify_project(&voter, &pid, &true);
 
         let proposal = client.get_proposal(&pid);
-        assert_eq!(proposal.votes_for, 1);
+        assert_eq!(proposal.votes_for, 100);
     }
 
     // ─── ProjectMilestoneNFT tests (#205) ────────────────────────────────────
@@ -5102,5 +5249,220 @@ mod tests {
     fn test_get_refund_request_not_found_panics() {
         let (_env, _cid, client, _admin, _pid) = setup();
         client.get_refund_request(&0);
+    }
+
+    #[test]
+    fn test_quadratic_weights() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(2000 * STROOP));
+        
+        // Seedling = 10 XLM
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32);
+        assert_eq!(client.get_voter_weight(&donor), 100);
+        
+        // Tree = 100 XLM (+90)
+        client.donate(&token, &donor, &pid, &(90 * STROOP), &0u32);
+        assert_eq!(client.get_voter_weight(&donor), 141);
+        
+        // Forest = 500 XLM (+400)
+        client.donate(&token, &donor, &pid, &(400 * STROOP), &0u32);
+        assert_eq!(client.get_voter_weight(&donor), 173);
+        
+        // EarthGuardian = 2000 XLM (+1500)
+        client.donate(&token, &donor, &pid, &(1500 * STROOP), &0u32);
+        assert_eq!(client.get_voter_weight(&donor), 200);
+    }
+
+    #[test]
+    fn test_delegate_vote_success() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP));
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32); // Seedling = 100
+
+        client.delegate_vote(&donor, &delegate);
+        
+        assert_eq!(client.get_delegate(&donor).unwrap(), delegate);
+        assert_eq!(client.get_delegated_weight(&delegate), 100);
+        assert_eq!(client.get_voter_weight(&delegate), 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot delegate to self")]
+    fn test_cannot_delegate_to_self() {
+        let (env, _cid, client, _admin, _pid) = setup();
+        let donor = Address::generate(&env);
+        client.delegate_vote(&donor, &donor);
+    }
+
+    #[test]
+    fn test_revoke_delegation() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP));
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32); // Seedling = 100
+
+        client.delegate_vote(&donor, &delegate);
+        assert_eq!(client.get_delegated_weight(&delegate), 100);
+
+        client.revoke_delegation(&donor);
+        assert!(client.get_delegate(&donor).is_none());
+        assert_eq!(client.get_delegated_weight(&delegate), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Must revoke delegation before voting directly")]
+    fn test_delegator_cannot_vote_directly() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP));
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32);
+        
+        client.create_proposal(&signers1(&env, &admin), &pid, &0);
+        client.delegate_vote(&donor, &delegate);
+        client.vote_verify_project(&donor, &pid, &true);
+    }
+
+    #[test]
+    fn test_delegate_votes_with_combined_weight() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP)); // Seedling
+        StellarAssetClient::new(&env, &token).mint(&delegate, &(100 * STROOP)); // Tree
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32);
+        client.donate(&token, &delegate, &pid, &(100 * STROOP), &0u32);
+        
+        client.delegate_vote(&donor, &delegate);
+        
+        // Own=141, Delegated=100 -> Total=241
+        assert_eq!(client.get_voter_weight(&delegate), 241);
+
+        client.create_proposal(&signers1(&env, &admin), &pid, &0);
+        client.vote_verify_project(&delegate, &pid, &true);
+        let prop = client.get_proposal(&pid);
+        assert_eq!(prop.votes_for, 241);
+    }
+
+    #[test]
+    fn test_redelegate_moves_weight() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate1 = Address::generate(&env);
+        let delegate2 = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP));
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32);
+
+        client.delegate_vote(&donor, &delegate1);
+        assert_eq!(client.get_delegated_weight(&delegate1), 100);
+
+        client.delegate_vote(&donor, &delegate2);
+        assert_eq!(client.get_delegated_weight(&delegate1), 0);
+        assert_eq!(client.get_delegated_weight(&delegate2), 100);
+    }
+
+    #[test]
+    fn test_donation_upgrade_updates_delegated_weight() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(100 * STROOP));
+        
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32); // Seedling
+        client.delegate_vote(&donor, &delegate);
+        assert_eq!(client.get_delegated_weight(&delegate), 100);
+
+        // Upgrade to Tree (100 XLM total)
+        client.donate(&token, &donor, &pid, &(90 * STROOP), &0u32);
+        assert_eq!(client.get_delegated_weight(&delegate), 141);
+    }
+
+    #[test]
+    fn test_donate_asset_upgrade_updates_delegated_weight() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        client.donate_asset(&donor, &pid, &(10 * STROOP), &symbol_short!("yXLM"), &0u32); // Seedling
+        client.delegate_vote(&donor, &delegate);
+        assert_eq!(client.get_delegated_weight(&delegate), 100);
+
+        client.donate_asset(&donor, &pid, &(90 * STROOP), &symbol_short!("yXLM"), &0u32); // Tree
+        assert_eq!(client.get_delegated_weight(&delegate), 141);
+    }
+
+    #[test]
+    fn test_donate_usdc_upgrade_updates_delegated_weight() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        
+        // Setup USDC
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        client.set_usdc_token(&admin, &token);
+        let oracle_id = env.register_contract(None, MockOracle);
+        client.set_oracle(&admin, &oracle_id); // 1 USDC = 8 XLM
+
+        StellarAssetClient::new(&env, &token).mint(&donor, &(100 * 10_000_000));
+        
+        // 2 USDC = 16 XLM -> Seedling
+        let usdc_amount1 = 2 * 10_000_000;
+        client.donate_usdc(&token, &donor, &pid, &usdc_amount1, &0u32);
+        client.delegate_vote(&donor, &delegate);
+        assert_eq!(client.get_delegated_weight(&delegate), 100);
+
+        // 11 USDC = 88 XLM -> total 104 XLM -> Tree
+        let usdc_amount2 = 11 * 10_000_000;
+        client.donate_usdc(&token, &donor, &pid, &usdc_amount2, &0u32);
+        assert_eq!(client.get_delegated_weight(&delegate), 141);
+    }
+
+    #[test]
+    fn test_passive_donor_delegates_to_active() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP));
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32); // Seedling
+
+        // delegate has 0 donations, badge None.
+        client.delegate_vote(&donor, &delegate);
+        
+        // Active member (delegate) has no badge but has delegated weight.
+        assert_eq!(client.get_voter_weight(&delegate), 100);
+        
+        client.create_proposal(&signers1(&env, &admin), &pid, &0);
+        
+        // Because weight > 0, delegate can vote even without their own badge!
+        client.vote_verify_project(&delegate, &pid, &true);
+        let prop = client.get_proposal(&pid);
+        assert_eq!(prop.votes_for, 100);
+    }
+
+    #[test]
+    #[should_panic(expected = "Already voted on this proposal")]
+    fn test_delegate_cannot_vote_twice() {
+        let (env, _cid, client, admin, pid) = setup();
+        let donor = Address::generate(&env);
+        let delegate = Address::generate(&env);
+        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        StellarAssetClient::new(&env, &token).mint(&donor, &(10 * STROOP));
+        client.donate(&token, &donor, &pid, &(10 * STROOP), &0u32);
+
+        client.delegate_vote(&donor, &delegate);
+        client.create_proposal(&signers1(&env, &admin), &pid, &0);
+        client.vote_verify_project(&delegate, &pid, &true);
+        client.vote_verify_project(&delegate, &pid, &true); // should panic
     }
 }
