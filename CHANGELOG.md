@@ -10,6 +10,14 @@
 
 ### Features
 
+* **contracts:** Escrow contract event emission, partial milestone disputes, auto-refund on expiry, and job enumeration
+  - Emit events for all state-mutating functions: `job_creat`, `ms_rel`, `ms_claim`, `ms_disp`, `ms_reslv`, `job_refnd`, `job_disp`, `job_reslv`
+  - Per-milestone dispute: `dispute_milestone` and `resolve_milestone_dispute` allow disputing and resolving individual milestones without freezing non-disputed milestones
+  - Auto-refund on expiry: `refund_expired_job` enables client to claim a full refund after configurable job deadline if no milestones have been claimed
+  - Job enumeration: `get_job_count` and `get_job_ids` view functions added with `JobCount` and `JobIds` tracking
+  - 20 unit tests and end-to-end integration lifecycle test covering all state changes and edge cases
+
+
 * **monitoring:** multi-window SLO burn-rate alerting with error budget dashboard (closes #240)
   - Defined SLOs: donation recording (99.5%) and project listing (99.9%) over 30-day rolling windows
   - Recording rules in `monitoring/recording-rules.yml` computing error ratios and budget remaining
