@@ -19,6 +19,7 @@ const {
   uuid: uuidValidator,
 } = require("../validators/schemas");
 const { mapDonationRow } = require("../services/store");
+const { invalidateCache } = require("../middleware/cache");
 const { enqueueProfileUpdate } = require("../services/profileQueue");
 const { enqueuePushNotification } = require("../services/pushQueue");
 const { enqueueDonationMatching } = require("../services/matchQueue");
@@ -169,17 +170,49 @@ async function recordDonation(req, res, next) {
 
     // Enqueue donation matching for background processing
     if (currency === "XLM") {
-      enqueueDonationMatching(
-        projectId,
-        parsedAmount,
-        donorAddress,
-        transactionHash,
-      ).catch((err) => {
-        logger.error(
-          { event: "matching_enqueue_failed", err, projectId, donorAddress },
-          "Failed to enqueue donation matching job",
-        );
-      });
+      const matchesResult = await client.query(
+        `SELECT id, matcher_address, cap_xlm, matched_xlm, multiplier
+         FROM donation_matches
+         WHERE project_id = $1
+           AND status = 'active'
+           AND expires_at > NOW()`,
+        [projectId],
+      );
+
+      for (const match of matchesResult.rows) {
+        const matchedXlm = Number.parseFloat(match.matched_xlm || "0");
+        const capXlm = Number.parseFloat(match.cap_xlm);
+        const remaining = capXlm - matchedXlm;
+
+        if (remaining > 0) {
+          const matchAmount = Math.min(
+            parsedAmount * match.multiplier,
+            remaining,
+          );
+
+          await client.query(
+            `INSERT INTO donations (
+              id, project_id, donor_address, amount_xlm, amount, currency, message, transaction_hash, created_at
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+            [
+              uuid(),
+              projectId,
+              match.matcher_address,
+              matchAmount,
+              matchAmount,
+              "XLM",
+              `Matching donation for donation from ${donorAddress}`,
+              `match-${transactionHash}-${match.id}`,
+            ],
+          );
+
+          await client.query(
+            "UPDATE donation_matches SET matched_xlm = matched_xlm + $1 WHERE id = $2",
+            [matchAmount, match.id],
+          );
+        }
+      }
     }
 
     // Update project totals — use converted XLM amount for path-payment donations
@@ -253,6 +286,11 @@ async function recordDonation(req, res, next) {
 
     const mappedDonation = mapDonationRow(donationResult.rows[0]);
     donationEvents.emit("new_donation", mappedDonation);
+
+    invalidateCache(`cache:v1:projects:detail:${projectId}`);
+    invalidateCache("cache:v1:leaderboard:*");
+    invalidateCache("cache:v1:stats:global");
+    invalidateCache("cache:v1:impact:global");
 
     const responseBody = { success: true, data: mappedDonation };
     res.status(201).json(responseBody);
@@ -387,6 +425,45 @@ router.get(
       next(e);
     }
   });
+
+// GET /api/donations/recurring/:donorAddress - fetch recurring schedules for a donor
+router.get(
+  "/recurring/:donorAddress",
+  validate(z.object({ donorAddress: stellarAddress }), "params"),
+  async (req, res, next) => {
+    try {
+      const result = await pool.query(
+        `SELECT r.*, p.name AS project_name, p.wallet_address AS project_wallet
+         FROM recurring_donations r
+         JOIN projects p ON r.project_id = p.id
+         WHERE r.donor_address = $1
+         ORDER BY r.created_at DESC`,
+        [req.params.donorAddress]
+      );
+      res.json({
+        success: true,
+        data: result.rows.map((row) => ({
+          id: row.id,
+          donorAddress: row.donor_address,
+          recurringId: row.recurring_id,
+          projectId: row.project_id,
+          projectName: row.project_name,
+          projectWallet: row.project_wallet,
+          amount: parseFloat(row.amount),
+          currency: row.currency,
+          intervalSeconds: row.interval_seconds,
+          nextExecutionAt: row.next_execution_at.toISOString(),
+          keeperIncentive: parseFloat(row.keeper_incentive),
+          active: row.active,
+          createdAt: row.created_at.toISOString(),
+          updatedAt: row.updated_at.toISOString(),
+        })),
+      });
+    } catch (e) {
+      next(e);
+    }
+  }
+);
 
 // GET /api/donations/:id - single donation fetch endpoint
 router.get("/:id", async (req, res, next) => {
