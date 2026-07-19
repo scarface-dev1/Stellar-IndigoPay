@@ -1,5 +1,13 @@
 ## [Unreleased]
 
+### Performance
+
+* **frontend:** isolate LiveDonationTicker component to eliminate 3.5s page-wide re-render cycle
+  - Extract `LiveDonationTicker` into `frontend/components/LiveDonationTicker.tsx` as a `React.memo`-wrapped component
+  - Move state rotation (`tickerIndex`) and `setInterval` loop internally inside `LiveDonationTicker`
+  - Remove parent `Home` page component re-renders on ticker ticks
+  - Add unit test suite in `frontend/components/__tests__/LiveDonationTicker.test.tsx`
+
 ### Features
 
 * **frontend:** implement advanced keyboard navigation, global keyboard shortcuts, route focus management, and skip links
