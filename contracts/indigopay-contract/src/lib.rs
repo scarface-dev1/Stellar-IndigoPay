@@ -3287,12 +3287,12 @@ mod tests {
         grant_badge(&env, &cid, &voter);
         client.vote_verify_project(&voter, &pid, &true);
         let p = client.get_proposal(&pid);
-        assert_eq!(p.votes_for, 1);
+        assert_eq!(p.votes_for, 100);
         assert_eq!(p.votes_against, 0);
     }
 
     #[test]
-    #[should_panic(expected = "Only badge holders (Seedling or above) can vote")]
+    #[should_panic(expected = "Only badge holders (Seedling or above) or active delegates can vote")]
     fn test_non_badge_holder_cannot_vote() {
         let (env, _cid, client, admin, pid) = setup();
         client.create_proposal(&signers1(&env, &admin), &pid, &0u32);
@@ -3326,8 +3326,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 2);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 200);
+        assert_eq!(p.votes_against, 100);
     }
 
     #[test]
@@ -3345,8 +3345,8 @@ mod tests {
         client.resolve_proposal(&pid);
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 2);
+        assert_eq!(p.votes_for, 100);
+        assert_eq!(p.votes_against, 200);
     }
 
     #[test]
@@ -3366,8 +3366,8 @@ mod tests {
 
         let p = client.get_proposal(&pid);
         assert!(p.resolved);
-        assert_eq!(p.votes_for, 1);
-        assert_eq!(p.votes_against, 1);
+        assert_eq!(p.votes_for, 100);
+        assert_eq!(p.votes_against, 100);
 
         // A tie (1 for, 1 against) produces a rejection outcome.
         // Event-level assertion is intentionally skipped here because the
@@ -3561,7 +3561,7 @@ mod tests {
         client.vote_verify_project(&voter, &pid, &true);
 
         let proposal = client.get_proposal(&pid);
-        assert_eq!(proposal.votes_for, 1);
+        assert_eq!(proposal.votes_for, 100);
     }
 
     /// Test minimum voting duration enforcement (issue #209).
@@ -3584,7 +3584,7 @@ mod tests {
         client.vote_verify_project(&voter, &pid, &true);
 
         let proposal = client.get_proposal(&pid);
-        assert_eq!(proposal.votes_for, 1);
+        assert_eq!(proposal.votes_for, 100);
     }
 
     // ─── ProjectMilestoneNFT tests (#205) ────────────────────────────────────
@@ -5413,16 +5413,16 @@ mod tests {
         let oracle_id = env.register_contract(None, MockOracle);
         client.set_oracle(&admin, &oracle_id); // 1 USDC = 8 XLM
 
-        StellarAssetClient::new(&env, &token).mint(&donor, &(100 * 1_000_000));
+        StellarAssetClient::new(&env, &token).mint(&donor, &(100 * 10_000_000));
         
         // 2 USDC = 16 XLM -> Seedling
-        let usdc_amount1 = 2 * 1_000_000;
+        let usdc_amount1 = 2 * 10_000_000;
         client.donate_usdc(&token, &donor, &pid, &usdc_amount1, &0u32);
         client.delegate_vote(&donor, &delegate);
         assert_eq!(client.get_delegated_weight(&delegate), 100);
 
         // 11 USDC = 88 XLM -> total 104 XLM -> Tree
-        let usdc_amount2 = 11 * 1_000_000;
+        let usdc_amount2 = 11 * 10_000_000;
         client.donate_usdc(&token, &donor, &pid, &usdc_amount2, &0u32);
         assert_eq!(client.get_delegated_weight(&delegate), 141);
     }

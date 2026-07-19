@@ -29,7 +29,7 @@ report-types = ["Html", "Lcov"]
 output-dir = "coverage/"
 
 # Run tests with the testutils feature so fuzz tests don't fail
-features = ["testutils"]
+features = "testutils"
 
 # Run only unit tests (skip integration tests if any)
 test-filters = ["tests::"]
