@@ -58,7 +58,7 @@ function buildStaticCsp(allowFraming = false) {
     "font-src 'self' https://fonts.gstatic.com",
     // OSM tiles loaded as images; Leaflet marker icons use data: URIs.
     `img-src 'self' data: blob: ${LEAFLET_TILE_SOURCES}`,
-    `connect-src 'self' ${STELLAR_CONNECT} https://api.coingecko.com`,
+    `connect-src 'self' ${STELLAR_CONNECT} https://api.coingecko.com ${process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL : ''}`,
     "object-src 'none'",
     "base-uri 'self'",
     "form-action 'self'",

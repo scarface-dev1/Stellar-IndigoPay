@@ -14,6 +14,8 @@ import { PriceProvider } from "@/lib/priceContext";
 import { WalletProvider } from "@/lib/WalletProvider";
 import { ErrorBoundary } from "@/lib/ErrorBoundary";
 import useOnlineStatus from "@/hooks/useOnlineStatus";
+import useShortcuts from "@/hooks/useShortcuts";
+import GlobalSearchModal from "@/components/GlobalSearchModal";
 import ConnectivityBanner from "@/components/ConnectivityBanner";
 import OfflineFallback from "@/components/OfflineFallback";
 import InstallPrompt from "@/components/InstallPrompt";
@@ -33,6 +35,29 @@ import "@/styles/globals.css";
 export default function App({ Component, pageProps }: AppProps) {
   const router = useRouter();
   const isOnline = useOnlineStatus();
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  useShortcuts([
+    { key: "k", meta: true, handler: () => setSearchOpen(true), description: "Open search" },
+    { key: "h", ctrl: true, handler: () => router.push("/"), description: "Go home" },
+    { key: "d", ctrl: true, handler: () => router.push("/dashboard"), description: "Dashboard" },
+  ]);
+
+  useEffect(() => {
+    const handleRouteChange = () => {
+      setTimeout(() => {
+        const mainContent = document.getElementById("main-content");
+        if (mainContent) {
+          mainContent.focus();
+        } else {
+          document.querySelector("h1")?.focus();
+        }
+      }, 100);
+    };
+
+    router.events.on("routeChangeComplete", handleRouteChange);
+    return () => router.events.off("routeChangeComplete", handleRouteChange);
+  }, [router]);
 
   // Create QueryClient once per session so cache survives page navigations.
   const [queryClient] = useState(
@@ -136,6 +161,7 @@ export default function App({ Component, pageProps }: AppProps) {
               <CookieConsent />
               <InstallPrompt />
               <ThemeTiedToaster />
+              {searchOpen && <GlobalSearchModal onClose={() => setSearchOpen(false)} />}
               </div>
               </WalletProvider>
             </PriceProvider>
