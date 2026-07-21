@@ -83,6 +83,11 @@ pub struct Project {
     pub deadline_ledger: u32,
     /// Lifecycle of the project's optional time-bound campaign.
     pub campaign_status: CampaignStatus,
+    /// Optional parent project ID for hierarchical project structure.
+    /// When set, this project is a sub-project of the specified parent.
+    /// Sub-projects inherit active status from parent (deactivating parent
+    /// deactivates children). Appended for backward compatibility.
+    pub parent_project_id: Option<String>,
 }
 
 /// Lifecycle of a project's optional time-bound fundraising campaign.
@@ -301,6 +306,9 @@ pub enum DataKey {
     // bulk operations (e.g. `deactivate_all_projects`) so they can
     // enumerate projects without external indexing.
     ProjectIdsAll,
+    // Sub-project IDs for a given parent project — enables hierarchical
+    // project structure queries (cross-contract project registry).
+    SubProjectIds(String),
     // Pending admin transfer for the two-step `transfer_admin` /
     // `accept_admin` flow. Stores `(old_admin, new_admin)` tuple.
     // Set when M-of-N admins call `transfer_admin` and cleared on
@@ -622,6 +630,7 @@ impl IndigoPayContract {
             goal: 0,
             deadline_ledger: 0,
             campaign_status: CampaignStatus::None,
+            parent_project_id: None,
         };
         env.storage()
             .instance()
@@ -649,6 +658,93 @@ impl IndigoPayContract {
 
         env.events()
             .publish((symbol_short!("proj_reg"), admin), project_id);
+        ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
+    }
+
+    /// Register a sub-project under an existing parent project.
+    /// The caller must be the parent project's wallet (require_auth).
+    /// Sub-projects are tracked in a `SubProjectIds(parent_id)` index
+    /// and inherit deactivation from their parent.
+    pub fn register_sub_project(
+        env: Env,
+        wallet: Address,
+        project_id: String,
+        name: String,
+        co2_per_xlm: u32,
+        parent_id: String,
+    ) {
+        wallet.require_auth();
+        require_not_paused(&env);
+        if env
+            .storage()
+            .instance()
+            .has(&DataKey::Project(project_id.clone()))
+        {
+            panic!("Project already registered");
+        }
+        if co2_per_xlm > MAX_CO2_PER_XLM {
+            panic!("CO2 per XLM exceeds maximum");
+        }
+        // Verify parent exists and wallet matches
+        let parent: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(parent_id.clone()))
+            .expect("Parent project not found");
+        if parent.wallet != wallet {
+            panic!("Wallet does not match parent project wallet");
+        }
+        let project = Project {
+            id: project_id.clone(),
+            name,
+            wallet: wallet.clone(),
+            co2_per_xlm,
+            total_raised: 0,
+            donor_count: 0,
+            active: true,
+            paused: false,
+            registered_at: env.ledger().sequence(),
+            goal: 0,
+            deadline_ledger: 0,
+            campaign_status: CampaignStatus::None,
+            parent_project_id: Some(parent_id.clone()),
+        };
+        env.storage()
+            .instance()
+            .set(&DataKey::Project(project_id.clone()), &project);
+
+        // Track in parent's sub-project list
+        let mut sub_ids: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SubProjectIds(parent_id.clone()))
+            .unwrap_or(Vec::new(&env));
+        sub_ids.push_back(project_id.clone());
+        env.storage()
+            .instance()
+            .set(&DataKey::SubProjectIds(parent_id.clone()), &sub_ids);
+
+        let count: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProjectCount)
+            .unwrap_or(0);
+        let next_count = count.checked_add(1).expect("ProjectCount overflow");
+        env.storage()
+            .instance()
+            .set(&DataKey::ProjectCount, &next_count);
+
+        // Track in global project id index
+        let mut ids: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProjectIdsAll)
+            .unwrap_or(Vec::new(&env));
+        ids.push_back(project_id.clone());
+        env.storage().instance().set(&DataKey::ProjectIdsAll, &ids);
+
+        env.events()
+            .publish((symbol_short!("sub_reg"), wallet), (parent_id, project_id));
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
@@ -684,6 +780,7 @@ impl IndigoPayContract {
                 goal: 0,
                 deadline_ledger: 0,
                 campaign_status: CampaignStatus::None,
+                parent_project_id: None,
             };
             env.storage()
                 .instance()
@@ -749,7 +846,26 @@ impl IndigoPayContract {
         project.active = false;
         env.storage()
             .instance()
-            .set(&DataKey::Project(project_id), &project);
+            .set(&DataKey::Project(project_id.clone()), &project);
+
+        // Cascade deactivation to all sub-projects
+        let sub_ids: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SubProjectIds(project_id.clone()))
+            .unwrap_or(Vec::new(&env));
+        for sub_id in sub_ids.iter() {
+            let mut sub: Project = env
+                .storage()
+                .instance()
+                .get(&DataKey::Project(sub_id.clone()))
+                .expect("Sub-project not found");
+            sub.active = false;
+            env.storage()
+                .instance()
+                .set(&DataKey::Project(sub_id), &sub);
+        }
+
         ensure_min_ttl(&env, VOTING_WINDOW_LEDGERS * 4);
     }
 
@@ -1371,6 +1487,60 @@ impl IndigoPayContract {
             .instance()
             .get(&DataKey::Project(project_id))
             .expect("Project not found")
+    }
+
+    /// Returns all sub-project IDs registered under the given parent.
+    pub fn get_sub_projects(env: Env, parent_id: String) -> Vec<String> {
+        env.storage()
+            .instance()
+            .get(&DataKey::SubProjectIds(parent_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    /// Returns aggregated impact metrics for a parent project and all its
+    /// sub-projects: (total_raised, total_co2, total_donors).
+    /// CO₂ is recomputed per-project as (total_raised / STROOP) * co2_per_xlm.
+    pub fn get_aggregated_impact(env: Env, parent_id: String) -> (i128, i128, u32) {
+        let parent: Project = env
+            .storage()
+            .instance()
+            .get(&DataKey::Project(parent_id.clone()))
+            .expect("Project not found");
+
+        let mut total_raised = parent.total_raised;
+        let mut total_donors = parent.donor_count;
+        let parent_xlm = parent.total_raised / STROOP;
+        let mut total_co2 = parent_xlm
+            .checked_mul(parent.co2_per_xlm as i128)
+            .expect("CO2 calculation overflow");
+
+        let sub_ids: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SubProjectIds(parent_id))
+            .unwrap_or(Vec::new(&env));
+        for sub_id in sub_ids.iter() {
+            let sub: Project = env
+                .storage()
+                .instance()
+                .get(&DataKey::Project(sub_id))
+                .expect("Sub-project not found");
+            total_raised = total_raised
+                .checked_add(sub.total_raised)
+                .expect("Aggregated total_raised overflow");
+            total_donors = total_donors
+                .checked_add(sub.donor_count)
+                .expect("Aggregated donor_count overflow");
+            let sub_xlm = sub.total_raised / STROOP;
+            total_co2 = total_co2
+                .checked_add(
+                    sub_xlm
+                        .checked_mul(sub.co2_per_xlm as i128)
+                        .expect("CO2 calculation overflow"),
+                )
+                .expect("Aggregated CO2 overflow");
+        }
+        (total_raised, total_co2, total_donors)
     }
 
     pub fn get_donor_stats(env: Env, donor: Address) -> DonorStats {
@@ -6124,5 +6294,238 @@ mod tests {
         let sub_1 = recurrings.get(1).unwrap();
         assert_eq!(sub_1.amount, 20 * STROOP);
         assert_eq!(sub_1.currency, symbol_short!("USDC"));
+    }
+
+    // ─── Cross-Contract Project Registry tests (#391) ───────────────────────
+
+    #[test]
+    fn test_create_sub_project() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let parent_id = String::from_str(&env, "parent");
+        let parent_wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &parent_id,
+            &String::from_str(&env, "Parent Project"),
+            &parent_wallet,
+            &100u32,
+        );
+
+        let child_id = String::from_str(&env, "child");
+        client.register_sub_project(
+            &parent_wallet,
+            &child_id,
+            &String::from_str(&env, "Child Project"),
+            &50u32,
+            &parent_id,
+        );
+
+        let child = client.get_project(&child_id);
+        assert_eq!(child.name, String::from_str(&env, "Child Project"));
+        assert_eq!(child.co2_per_xlm, 50);
+        assert_eq!(child.parent_project_id, Some(parent_id.clone()));
+        assert!(child.active);
+        assert_eq!(child.wallet, parent_wallet);
+        assert_eq!(client.get_project_count(), 2);
+    }
+
+    #[test]
+    fn test_get_sub_projects() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let parent_id = String::from_str(&env, "parent");
+        let parent_wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &parent_id,
+            &String::from_str(&env, "Parent"),
+            &parent_wallet,
+            &100u32,
+        );
+
+        let child1 = String::from_str(&env, "child1");
+        let child2 = String::from_str(&env, "child2");
+        client.register_sub_project(
+            &parent_wallet,
+            &child1,
+            &String::from_str(&env, "Child 1"),
+            &50u32,
+            &parent_id,
+        );
+        client.register_sub_project(
+            &parent_wallet,
+            &child2,
+            &String::from_str(&env, "Child 2"),
+            &75u32,
+            &parent_id,
+        );
+
+        // Non-parent project returns empty list
+        let unrelated = String::from_str(&env, "unrelated");
+        let unrelated_wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &unrelated,
+            &String::from_str(&env, "Unrelated"),
+            &unrelated_wallet,
+            &100u32,
+        );
+        assert_eq!(client.get_sub_projects(&unrelated).len(), 0);
+
+        let subs = client.get_sub_projects(&parent_id);
+        assert_eq!(subs.len(), 2);
+        assert_eq!(subs.get(0).unwrap(), child1);
+        assert_eq!(subs.get(1).unwrap(), child2);
+    }
+
+    #[test]
+    fn test_aggregated_impact() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let parent_id = String::from_str(&env, "parent");
+        let parent_wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &parent_id,
+            &String::from_str(&env, "Parent"),
+            &parent_wallet,
+            &100u32,
+        );
+
+        let child1 = String::from_str(&env, "child1");
+        let child2 = String::from_str(&env, "child2");
+        client.register_sub_project(
+            &parent_wallet,
+            &child1,
+            &String::from_str(&env, "Child 1"),
+            &200u32,
+            &parent_id,
+        );
+        client.register_sub_project(
+            &parent_wallet,
+            &child2,
+            &String::from_str(&env, "Child 2"),
+            &300u32,
+            &parent_id,
+        );
+
+        // Donate to parent: 20 XLM → co2 = 20 * 100 = 2000
+        let token_admin = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(token_admin)
+            .address();
+        let donor = Address::generate(&env);
+        StellarAssetClient::new(&env, &token).mint(&donor, &(60 * STROOP));
+        client.donate(&token, &donor, &parent_id, &(20 * STROOP), &0u32);
+
+        // Donate to child1: 15 XLM → co2 = 15 * 200 = 3000
+        client.donate(&token, &donor, &child1, &(15 * STROOP), &1u32);
+
+        // Donate to child2: 25 XLM → co2 = 25 * 300 = 7500
+        client.donate(&token, &donor, &child2, &(25 * STROOP), &2u32);
+
+        let (total_raised, total_co2, total_donors) = client.get_aggregated_impact(&parent_id);
+        assert_eq!(total_raised, 60 * STROOP);
+        // CO2: parent=20*100 + child1=15*200 + child2=25*300 = 2000+3000+7500 = 12500
+        assert_eq!(total_co2, 12500);
+        // One unique donor across all projects
+        assert_eq!(total_donors, 3);
+    }
+
+    #[test]
+    fn test_parent_deactivation_cascades() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let parent_id = String::from_str(&env, "parent");
+        let parent_wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &parent_id,
+            &String::from_str(&env, "Parent"),
+            &parent_wallet,
+            &100u32,
+        );
+
+        let child1 = String::from_str(&env, "child1");
+        let child2 = String::from_str(&env, "child2");
+        client.register_sub_project(
+            &parent_wallet,
+            &child1,
+            &String::from_str(&env, "Child 1"),
+            &50u32,
+            &parent_id,
+        );
+        client.register_sub_project(
+            &parent_wallet,
+            &child2,
+            &String::from_str(&env, "Child 2"),
+            &75u32,
+            &parent_id,
+        );
+
+        // All active before deactivation
+        assert!(client.get_project(&parent_id).active);
+        assert!(client.get_project(&child1).active);
+        assert!(client.get_project(&child2).active);
+
+        // Deactivate parent — should cascade
+        client.deactivate_project(&admin, &parent_id);
+
+        assert!(!client.get_project(&parent_id).active);
+        assert!(!client.get_project(&child1).active);
+        assert!(!client.get_project(&child2).active);
+    }
+
+    #[test]
+    #[should_panic(expected = "Wallet does not match parent project wallet")]
+    fn test_unauthorized_sub_project_registration() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let cid = env.register_contract(None, IndigoPayContract);
+        let client = IndigoPayContractClient::new(&env, &cid);
+        let admin = Address::generate(&env);
+        client.initialize(&signers1(&env, &admin), &1u32);
+
+        let parent_id = String::from_str(&env, "parent");
+        let parent_wallet = Address::generate(&env);
+        client.register_project(
+            &admin,
+            &parent_id,
+            &String::from_str(&env, "Parent"),
+            &parent_wallet,
+            &100u32,
+        );
+
+        // Try to register sub-project with a different wallet
+        let imposter_wallet = Address::generate(&env);
+        let child_id = String::from_str(&env, "child");
+        client.register_sub_project(
+            &imposter_wallet,
+            &child_id,
+            &String::from_str(&env, "Child"),
+            &50u32,
+            &parent_id,
+        );
     }
 }
